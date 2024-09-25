@@ -77,6 +77,9 @@ class WaveformAnalysis : public Processor {
   // Fit the digitized waveform using a lognormal function
   void FitWaveform();
 
+  // Test refactored functions in WaveformUtils
+  void TestUtils();
+
   virtual Processor::Result Event(DS::Root *ds, DS::EV *ev);
   virtual void SetS(std::string param, std::string value);
   virtual void SetD(std::string param, double value);

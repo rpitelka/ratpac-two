@@ -7,6 +7,7 @@
 
 #include "RAT/DS/DigitPMT.hh"
 #include "RAT/DS/RunStore.hh"
+#include "RAT/WaveformUtil.hh"
 
 namespace RAT {
 
@@ -131,6 +132,8 @@ void WaveformAnalysis::DoAnalysis(DS::DigitPMT* digitpmt, double timeOffset) {
   if (fRunFit) {
     FitWaveform();
   }
+
+  TestUtils();
 
   digitpmt->SetDigitizedTime(fDigitTime - timeOffset);
   digitpmt->SetFittedTime(fFittedTime - timeOffset);
@@ -434,12 +437,48 @@ void WaveformAnalysis::FitWaveform() {
   delete ln_fit;
 }
 
+void WaveformAnalysis::TestUtils() {
+  double pedestal = WaveformUtil::CalculatePedestalADC(fDigitWfm, fPedWindowLow, fPedWindowHigh);
+  if (fPedestal != pedestal) {
+    Log::Die("WaveformAnalysis: CalculatePedestal test failed.");
+  }
+
+  std::vector<double> voltage_wf = WaveformUtil::ADCtoVoltage(fDigitWfm, fVoltageRes, pedestal = pedestal);
+
+  std::pair<int, double> peak = WaveformUtil::FindHighestPeak(voltage_wf);
+  if (TMath::Abs(fVoltagePeak - peak.second) >= 0.001) {
+    Log::Die("WaveformAnalysis: FindHighestPeak test failed (voltage).");
+  } else if (static_cast<int>(fSamplePeak) != peak.first) {
+    Log::Die("WaveformAnalysis: FindHighestPeak test failed (sample).");
+  }
+
+  double cfd = WaveformUtil::CalculateTimeCFD(voltage_wf, peak.first, fConstFrac, fLookback, fTimeStep);
+  if (TMath::Abs(fDigitTime - cfd) >= 0.001) {
+    Log::Die("WaveformAnalysis: CalculateTimeCFD test failed.");
+  }
+
+  int crossings = WaveformUtil::GetNCrossings(voltage_wf, fThreshold);
+  if (static_cast<int>(fNCrossings) != crossings) {
+    Log::Die("WaveformAnalysis: GetNCrossings test failed.");
+  }
+
+  double peakCharge =
+      WaveformUtil::IntegratePeak(voltage_wf, peak.first, fIntWindowLow, fIntWindowHigh, fTimeStep, fTermOhms);
+  if (TMath::Abs(fCharge - peakCharge) >= 0.001) {
+    Log::Die("WaveformAnalysis: IntegratePeak test failed.");
+  }
+
+  double totalCharge = WaveformUtil::IntegrateSliding(voltage_wf, fSlidingWindow, fChargeThresh, fTimeStep, fTermOhms);
+  if (TMath::Abs(fTotalCharge - totalCharge) >= 0.001) {
+    Log::Die("WaveformAnalysis: IntegrateSliding test failed.");
+  }
+}
+
 Processor::Result WaveformAnalysis::Event(DS::Root* ds, DS::EV* ev) {
   DS::Digit* dsdigit = &ev->GetDigitizer();
   DS::Run* run = DS::RunStore::GetRun(ds->GetRunID());
   const DS::ChannelStatus& ch_status = run->GetChannelStatus();
   std::vector<int> pmt_ids = dsdigit->GetIDs();
-  double total_charge = 0;
   for (int pmt_id : pmt_ids) {
     // Do not analyze negative pmtid channels, since they do not correspond to real PMTs.
     if (pmt_id < 0) continue;
@@ -447,10 +486,6 @@ Processor::Result WaveformAnalysis::Event(DS::Root* ds, DS::EV* ev) {
     DS::DigitPMT* digitpmt = ev->GetOrCreateDigitPMT(pmt_id);
     double time_offset = fApplyCableOffset ? ch_status.GetCableOffsetByPMTID(pmt_id) : 0.0;
     RunAnalysis(digitpmt, pmt_id, dsdigit, time_offset);
-    if (digitpmt->GetNCrossings() > 0) {
-      total_charge += digitpmt->GetDigitizedCharge();
-    }
-    ev->SetTotalCharge(total_charge);
     if (fZeroSuppress) {
       if (digitpmt->GetNCrossings() <= 0) {
         size_t nerased = ev->EraseDigitPMT(pmt_id);
