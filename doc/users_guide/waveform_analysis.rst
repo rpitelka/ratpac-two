@@ -1,6 +1,6 @@
 .. _waveform_analysis:
 
-Waveform analysis
+Waveform Analysis
 -----------------
 
 It is typical for modern detectors to digitize PMT pulses on waveform digitizers and readout entire waveforms for each PMT channel. These waveforms are then often processed offline to produce PMT hit-times and integrated charges, among other variables. ``ratpac-two`` both provides realistic simulation of the waveform digitizers, discussed in :ref:`digitization`, but also a full chain of waveform analysis that can be used to extract information about the PMT pulses. As with other features, this existing waveform analysis code can easily be extended for an experiment's particular use-cases, and the provided waveform processors should be treated as helpful examples rather than finished products.
@@ -11,7 +11,7 @@ In order to enable the digitization of waveforms, discussed in :ref:`digitizatio
 
 The waveform analysis is enabled by running the waveform analysis processor (e.g., ``/rat/proc WaveformPrep``). The analysis processors reads from a ratdb table called ``DIGITIZER_ANALYSIS``. In order to change the index of the table that is loaded, the user can select a new index using ``/rat/procset index_name``. More details are provided below. 
 
-Base analysis
+Base Analysis
 `````````````
 
 The primary waveform analysis processor is run from ``WaveformPrep``, which is critical to run prior to any other waveform processing. By default, ``WaveformPrep`` loads the ``DIGITIZER_ANALYSIS`` table with no index, which contains settings related to the pedestal window, the integration window, the voltage threshold to consider a PMT pulse, etc. ``WaveformPrep`` calculates (among other things) the integrated charge around the PMT pulse, the time-over-threshold, the voltage-over-threshold, the pedestal in a prompt-window, the peak voltage, the total charge across the full window, and the constant-fraction discriminator timing. These variables are written to the ``DigitPMT``.
@@ -99,25 +99,25 @@ There are several additional waveform analysis proccesors described below, each 
     
     /rat/proc WaveformAnalysisSinc
 
-For all of these processors, there is a utility located in ``util/src/`` called ``WaveformUtil.cc`` that provides useful analysis tools. For example, there are public methods to convert ADC counts to voltage, identify the peak of the waveform and the corresponding sample, get the total number of threshold crossings, etc.
+For all of these processors, there is a utility located in ``util/src/`` called ``WaveformUtil.cc`` that provides useful analysis tools. For example, there are public methods to convert ADC counts to voltage, identify the peak of the waveform and the corresponding sample, get the total number of threshold crossings, etc. Methods that are generally useful for waveform analysis purposes should be added to this utility class.
 
 -------------------------
 
-Lognormal fitting
+Lognormal Fitting
 `````````````````
 
-Describe lognormal fits.
+Fits a lognormal to a region around the digitized waveform peak.
 
 -------------------------
 
-Gaussian fitting
+Gaussian Fitting
 ````````````````
 
-Describe Gaussian fits.
+Fits a gaussian to a region around the digitized waveform peak.
 
 -------------------------
 
-Sinc interpolation
+Sinc Interpolation
 ``````````````````
 
 Describe sinc interpolation.
@@ -127,5 +127,8 @@ Describe sinc interpolation.
 WaveformAnalysisResult
 ``````````````````````
 
-Describe how the waveform analysis result works.
+All waveform analysis processors create one or more ``WaveformAnalysisResult`` objects, which are containers for the results of the waveform analysis on a single PE. These objects are written to the ``DigitPMT`` and can be accessed using the ``GetWaveformAnalysisResult`` method. The ``WaveformAnalysisResult`` contains the following information:
 
+* The fitted hit time of the photoelectron
+* The fitted charge of the photoelectron
+* A map of any other figures of merit calculated by the waveform analysis processor
