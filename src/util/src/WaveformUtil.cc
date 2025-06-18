@@ -100,14 +100,17 @@ int GetNCrossings(const std::vector<double>& waveform, double voltageThreshold) 
   return nCrossings;
 }
 
-std::tuple<int, double, double> GetCrossingsInfo(const std::vector<double>& waveform, double voltageThreshold,
-                                                 double timeStep) {
+std::tuple<int, double, double, std::vector<std::pair<int, int>>> GetCrossingsInfo(const std::vector<double>& waveform,
+                                                                                   double voltageThreshold,
+                                                                                   double timeStep) {
   /*
-  Calculates the total number of threshold crossings, time over threshold, and voltage over threshold
+  Calculates the total number of threshold crossings, time over threshold, voltage over threshold, and crossing samples
   */
   int nCrossings = 0;
   double timeOverThreshold = 0;
   double voltageOverThreshold = 0;
+  std::pair<int, int> crossing;
+  std::vector<std::pair<int, int>> crossingSamples;
 
   bool crossed = false;
   // Scan over the entire waveform
@@ -119,6 +122,7 @@ std::tuple<int, double, double> GetCrossingsInfo(const std::vector<double>& wave
       // Not already below thresh, count the crossing
       if (!crossed) {
         nCrossings += 1;
+        crossing.first = i;  // Store the crossing sample
       }
       // Count the time over threshold, mark that we crossed
       timeOverThreshold += timeStep;
@@ -127,10 +131,20 @@ std::tuple<int, double, double> GetCrossingsInfo(const std::vector<double>& wave
     }
     // If we are above threshold
     if (voltage > voltageThreshold) {
+      if (crossed) {
+        // If we were previously below threshold, add the crossing sample
+        crossing.second = i;  // Store the crossing sample
+        crossingSamples.push_back(crossing);
+      }
       crossed = false;
     }
+    // If we are at the end of the waveform, and we were below threshold, add the last crossing sample
+    if (i == waveform.size() - 1 && crossed) {
+      crossing.second = i;  // Store the crossing sample
+      crossingSamples.push_back(crossing);
+    }
   }
-  return std::make_tuple(nCrossings, timeOverThreshold, voltageOverThreshold);
+  return std::make_tuple(nCrossings, timeOverThreshold, voltageOverThreshold, crossingSamples);
 }
 
 double CalculateTimeCFD(const std::vector<double>& waveform, int peakSample, int lookBack, double timeStep,

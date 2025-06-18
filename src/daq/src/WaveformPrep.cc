@@ -117,10 +117,12 @@ void WaveformPrep::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t
   double voltagePeak = peak.second;
 
   // Get the total number of threshold crossings
-  std::tuple<int, double, double> crossingsInfo = WaveformUtil::GetCrossingsInfo(voltWfm, fThreshold, fTimeStep);
+  std::tuple<int, double, double, std::vector<std::pair<int, int>>> crossingsInfo =
+      WaveformUtil::GetCrossingsInfo(voltWfm, fThreshold, fTimeStep);
   int nCrossings = std::get<0>(crossingsInfo);
   double timeOverThreshold = std::get<1>(crossingsInfo);
   double voltageOverThreshold = std::get<2>(crossingsInfo);
+  std::vector<std::pair<int, int>> crossingSamples = std::get<3>(crossingsInfo);
 
   // Calculate the constant-fraction hit-time
   double digitTime = WaveformUtil::INVALID;
@@ -135,6 +137,7 @@ void WaveformPrep::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t
   digitpmt->SetDigitizedCharge(charge);
   digitpmt->SetDigitizedTotalCharge(totalCharge);
   digitpmt->SetNCrossings(nCrossings);
+  digitpmt->SetCrossingSamples(crossingSamples);
   digitpmt->SetTimeOverThreshold(timeOverThreshold);
   digitpmt->SetVoltageOverThreshold(voltageOverThreshold);
   digitpmt->SetPedestal(pedestal);

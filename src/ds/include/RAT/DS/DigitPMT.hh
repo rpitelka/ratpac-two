@@ -48,6 +48,10 @@ class DigitPMT : public TObject {
   virtual void SetNCrossings(Int_t _nCrossings) { this->nCrossings = _nCrossings; }
   virtual Int_t GetNCrossings() { return nCrossings; }
 
+  /** Samples at which the threshold crossings occured */
+  virtual void SetCrossingSamples(const std::vector<std::pair<int, int>>& samples) { this->dCrossingSamples = samples; }
+  virtual const std::vector<std::pair<int, int>>& GetCrossingSamples() const { return dCrossingSamples; }
+
   /** Total time that the voltage over threshold */
   virtual void SetTimeOverThreshold(Double_t _timeOverThresh) { this->timeOverThresh = _timeOverThresh; }
   virtual Double_t GetTimeOverThreshold() { return timeOverThresh; }
@@ -135,6 +139,7 @@ class DigitPMT : public TObject {
   Double_t dCharge = -9999;
   Double_t dTCharge = -9999;
   Int_t nCrossings = -9999;
+  std::vector<std::pair<int, int>> dCrossingSamples = {};
   Double_t timeOverThresh = -9999;
   Double_t voltageOverThresh = -9999;
   Double_t pedestal = -9999;
