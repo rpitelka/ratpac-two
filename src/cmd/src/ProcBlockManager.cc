@@ -31,6 +31,8 @@
 #include <RAT/WaveformAnalysisSinc.hh>
 #include <RAT/WaveformPrep.hh>
 
+#include "RAT/WaveformAnalysisRSNNLS.hh"
+
 namespace RAT {
 
 // Helper func defined in ConstructUserProc.cc and overridden by user
@@ -96,6 +98,7 @@ ProcBlockManager::ProcBlockManager(ProcBlock *theMainBlock) {
   AppendProcessor<WaveformAnalysisGaussian>();
   AppendProcessor<WaveformAnalysisLognormal>();
   AppendProcessor<WaveformAnalysisSinc>();
+  AppendProcessor<WaveformAnalysisRSNNLS>();
   // Misc
   AppendProcessor<CountProc>();
   AppendProcessor<PruneProc>();
