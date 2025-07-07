@@ -1,13 +1,15 @@
+#include <OsqpEigen/OsqpEigen.h>
+#include <TCanvas.h>
 #include <TF1.h>
 #include <TH1D.h>
 #include <TMath.h>
 
 #include <RAT/Log.hh>
 #include <RAT/WaveformAnalysisRSNNLS.hh>
-#include <unsupported/Eigen/NNLS>
-#include <utility>
+#include <algorithm>  // for std::remove, std::remove_if
 
-#include "Eigen/Core"
+#include "Eigen/Dense"
+#include "Eigen/Sparse"
 #include "RAT/DS/DigitPMT.hh"
 #include "RAT/DS/RunStore.hh"
 #include "RAT/DS/WaveformAnalysisResult.hh"
@@ -65,7 +67,7 @@ void WaveformAnalysisRSNNLS::DoAnalysis(DS::DigitPMT* digitpmt, const std::vecto
 
   std::vector<std::pair<int, int>> crossings = digitpmt->GetCrossingSamples();
   if (crossings.empty()) {
-    debug << "WaveformAnalysisRSNNLS: No crossings found in waveform." << newline;
+    warn << "WaveformAnalysisRSNNLS: No crossings found in waveform." << newline;
     return;
   }
 
@@ -85,12 +87,12 @@ void WaveformAnalysisRSNNLS::DoAnalysis(DS::DigitPMT* digitpmt, const std::vecto
     const Eigen::VectorXd& w = result.second;
     for (size_t i = 0; i < indices.size(); ++i) {
       times.push_back(start_sample * fTimeStep + indices[i] * fTimeStep / fUpsampleFactor);
-      nonzero_weights.push_back(w[indices[i]]);
+      nonzero_weights.push_back(w[i]);  // w is now indexed by support position, not original index
     }
   }
 
   if (times.empty()) {
-    debug << "WaveformAnalysisRSNNLS: No non-zero weights found in waveform." << newline;
+    warn << "WaveformAnalysisRSNNLS: No non-zero weights found in waveform." << newline;
     return;
   }
 
@@ -124,7 +126,7 @@ Eigen::MatrixXd WaveformAnalysisRSNNLS::MakeTemplateMatrix(PMTPulse* pulse_templ
   Eigen::MatrixXd template_matrix(signal_length, n_bins);
   for (int i = 0; i < n_bins; ++i) {
     double delay = i * fTimeStep / upsample_factor;
-    pulse_template->SetPulseOffset(delay);
+    pulse_template->SetPulseTimeOffset(delay);
     for (int j = 0; j < signal_length; ++j) {
       // Calculate the time for each bin in the template
       double t = j * fTimeStep;
@@ -135,65 +137,111 @@ Eigen::MatrixXd WaveformAnalysisRSNNLS::MakeTemplateMatrix(PMTPulse* pulse_templ
   return template_matrix;
 }
 
-// Thresholded reverse-sparse NNLS using Eigen's NNLS
+// Implements thresholded reverse-sparse NNLS using OsqpEigen
 std::pair<std::vector<int>, Eigen::VectorXd> WaveformAnalysisRSNNLS::Thresholded_rsNNLS(const Eigen::VectorXd& m,
                                                                                         const Eigen::MatrixXd& S,
                                                                                         double threshold) {
-  int D = m.size();
-  int D2 = S.rows();
-  int K = S.cols();
-  if (D2 != D) {
+  const int D = m.size();
+  const int K = S.cols();
+  if (S.rows() != D) {
     RAT::Log::Die("WaveformAnalysisRSNNLS: S.rows() must equal m.size().");
   }
 
-  // 1) Solve the full-support NNLS: min_{w >= 0} || m - S w ||_2^2
-  Eigen::NNLS<Eigen::MatrixXd> nnls(S);
-  nnls.solve(m);
-  Eigen::VectorXd w = nnls.x();
+  // Numerical tolerance for zero detection
+  const double eps = 1e-12;
+  const int max_iterations = K;  // Safety limit to prevent infinite loops
 
-  // Build initial support S_reduced = [ j | w[j] > 0 ]
-  std::vector<int> S_reduced;
+  // Precompute QP data: P = S^T S, q = -S^T m
+  Eigen::SparseMatrix<double> P = (S.transpose() * S).sparseView();
+  // OSQP expects upper-triangular Hessian
+  P = P.triangularView<Eigen::Upper>();
+  Eigen::VectorXd q = -S.transpose() * m;
+
+  // Constraint matrix A = I_K  (0 <= w <= u)
+  Eigen::SparseMatrix<double> A(K, K);
+  A.setIdentity();
+
+  // Lower/upper bounds
+  Eigen::VectorXd lower = Eigen::VectorXd::Zero(K);
+  Eigen::VectorXd upper = Eigen::VectorXd::Constant(K, OsqpEigen::INFTY);
+
+  // Setup OSQP solver wrapper
+  OsqpEigen::Solver solver;
+  solver.settings()->setWarmStart(true);
+  solver.settings()->setVerbosity(false);
+  solver.data()->setNumberOfVariables(K);
+  solver.data()->setNumberOfConstraints(K);
+  solver.data()->setHessianMatrix(P);
+  solver.data()->setGradient(q);
+  solver.data()->setLinearConstraintsMatrix(A);
+  solver.data()->setLowerBound(lower);
+  solver.data()->setUpperBound(upper);
+
+  if (!solver.initSolver()) {
+    RAT::Log::Die("OSQP initialization failed");
+  }
+
+  // 1) Solve full-support NNLS
+  if (solver.solveProblem() != OsqpEigen::ErrorExitFlag::NoError) {
+    RAT::Log::Die("WaveformAnalysisRSNNLS: Initial OSQP solve failed");
+  }
+  Eigen::VectorXd w = solver.getSolution();
+
+  // Build initial support using numerical tolerance
+  std::vector<int> support;
+  support.reserve(K);
   for (int j = 0; j < K; ++j) {
-    if (w[j] > 0.0) S_reduced.push_back(j);
+    if (w[j] > eps) support.push_back(j);
   }
 
-  // 2) While there is some j in S_reduced with w[j] < threshold, prune:
-  while (!S_reduced.empty()) {
-    // Extract the coefficients on the current support
-    std::vector<double> w_vals;
-    for (int idx : S_reduced) w_vals.push_back(w[idx]);
-    auto min_it = std::min_element(w_vals.begin(), w_vals.end());
-    int j_min_idx = std::distance(w_vals.begin(), min_it);
-    int j_star = S_reduced[j_min_idx];
-
-    // If the smallest coefficient >= threshold, we are done
-    if (w[j_star] >= threshold) break;
-
-    // Otherwise, prune j_star: set it to zero and remove from S_reduced
-    w[j_star] = 0.0;
-    S_reduced.erase(S_reduced.begin() + j_min_idx);
-
-    // If no atoms remain, return all-zeros
-    if (S_reduced.empty()) return std::make_pair(std::vector<int>(), Eigen::VectorXd::Zero(K));
-
-    // Re-solve NNLS on the reduced dictionary S[:, S_reduced]
-    Eigen::MatrixXd S_P(D, S_reduced.size());
-    for (size_t i = 0; i < S_reduced.size(); ++i) {
-      S_P.col(i) = S.col(S_reduced[i]);
+  // 2) Threshold-prune loop with safety counter
+  int iteration = 0;
+  while (!support.empty() && iteration < max_iterations) {
+    // Find index with smallest coefficient among support
+    int j_star = support[0];
+    double min_val = w[j_star];
+    for (int idx : support) {
+      if (w[idx] < min_val) {
+        min_val = w[idx];
+        j_star = idx;
+      }
     }
-    Eigen::NNLS<Eigen::MatrixXd> nnls_P(S_P);
-    nnls_P.solve(m);
-    Eigen::VectorXd w_P = nnls_P.x();
 
-    // Zero out everything, then refill only the indices in S_reduced
-    w.setZero();
-    for (size_t i = 0; i < S_reduced.size(); ++i) {
-      w[S_reduced[i]] = w_P[i];
+    // Stop if all remaining >= threshold
+    if (min_val >= threshold) break;
+
+    // Otherwise prune: fix w[j_star] = 0 by setting its upper bound to 0
+    upper[j_star] = 0.0;
+    solver.updateBounds(lower, upper);
+
+    // Warm-start from previous solution
+    solver.updateGradient(q);
+    if (solver.solveProblem() != OsqpEigen::ErrorExitFlag::NoError) {
+      RAT::Log::Die("WaveformAnalysisRSNNLS: OSQP solve failed during pruning");
     }
-    // Loop until all remaining w[S_reduced] >= threshold or S_reduced is empty
+    w = solver.getSolution();
+
+    // Efficiently rebuild support by removing the pruned element
+    support.erase(std::remove(support.begin(), support.end(), j_star), support.end());
+
+    // Also remove any elements that became effectively zero
+    support.erase(std::remove_if(support.begin(), support.end(), [&w, eps](int idx) { return w[idx] <= eps; }),
+                  support.end());
+
+    ++iteration;
   }
-  // At this point, every nonzero entry of w is >= threshold (or w is zero)
-  return std::make_pair(S_reduced, w);
+
+  if (iteration >= max_iterations) {
+    warn << "WaveformAnalysisRSNNLS: Maximum iterations reached in threshold pruning" << newline;
+  }
+
+  // Return only the non-zero coefficients for efficiency
+  Eigen::VectorXd support_weights(support.size());
+  for (size_t i = 0; i < support.size(); ++i) {
+    support_weights[i] = w[support[i]];
+  }
+
+  return {support, support_weights};
 }
 
 }  // namespace RAT
