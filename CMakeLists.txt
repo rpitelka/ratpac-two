@@ -62,6 +62,8 @@ add_compile_options(-Wall)
 # Not turning on errors yet to ease transition
 # add_compile_options(-Werror)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 ###########################################################
 # Set CMAKE standards
 set(CMAKE_CXX_STANDARD 17)
