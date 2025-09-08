@@ -65,3 +65,13 @@
 "tapering_constant": 30.0,
 "num_sinc_lobes": 6
 }
+
+{
+"name": "DIGITIZER_ANALYSIS",
+"index": "MultiLognormalFit"
+"run_range": [0, 0],
+
+// Fit shape
+"lognormal_shape": 0.15,
+"lognormal_scale": 10.5,
+}

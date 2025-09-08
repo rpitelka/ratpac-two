@@ -94,7 +94,7 @@ else()
   set(TENSORFLOW_LIBRARIES "")
 endif()
 
-
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 ###########################################################
 # Options
 set(RATPAC_BINARY_DIR ${PROJECT_BINARY_DIR}/bin CACHE PATH "Where to output executables")
