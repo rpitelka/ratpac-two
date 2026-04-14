@@ -4,6 +4,7 @@
 #include <TMatrixD.h>
 #include <TVectorD.h>
 
+#include <RAT/Config.hh>
 #include <RAT/DS/RunStore.hh>
 #include <RAT/Log.hh>
 #include <RAT/NPEEstimator.hh>
@@ -15,6 +16,10 @@
 #include "RAT/DS/WaveformAnalysisResult.hh"
 #include "RAT/NNLS.hh"
 #include "RAT/WaveformUtil.hh"
+
+#if NLOPT_Enabled
+#include <nlopt.hpp>
+#endif
 
 namespace RAT {
 
@@ -66,6 +71,23 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid upsampling factor.");
     }
 
+    // Global fit configuration
+    global_fit_enabled = fDigit->GetZ("global_fit_enabled");
+    if (global_fit_enabled) {
+      global_fit_algo = fDigit->GetS("global_fit_algo");
+      global_fit_time_window = fDigit->GetD("global_fit_time_window");
+      global_fit_weight_max_scale = fDigit->GetD("global_fit_weight_max_scale");
+      global_fit_max_evals = fDigit->GetI("global_fit_max_evals");
+      global_fit_tolerance = fDigit->GetD("global_fit_tolerance");
+      global_fit_float_npe = fDigit->GetZ("global_fit_float_npe");
+#if !NLOPT_Enabled
+      warn << "WaveformAnalysisRAVEN: global_fit_enabled=true but NLOPT not available at build time. "
+              "Global fit disabled."
+           << newline;
+      global_fit_enabled = false;
+#endif
+    }
+
     // Initialize dictionary flags
     dictionary_built = false;
     cached_nsamples = -1;            // Invalid initial value to force dictionary build on first use
@@ -97,6 +119,12 @@ void WaveformAnalysisRAVEN::SetD(std::string param, double value) {
     npe_estimate_charge_width = value;
   } else if (param == "weight_merge_window") {
     weight_merge_window = value;
+  } else if (param == "global_fit_time_window") {
+    global_fit_time_window = value;
+  } else if (param == "global_fit_weight_max_scale") {
+    global_fit_weight_max_scale = value;
+  } else if (param == "global_fit_tolerance") {
+    global_fit_tolerance = value;
   } else {
     WaveformAnalyzerBase::SetD(param, value);
   }
@@ -117,6 +145,12 @@ void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
     npe_estimate = (value != 0);
   } else if (param == "npe_estimate_max_pes") {
     npe_estimate_max_pes = static_cast<size_t>(value);
+  } else if (param == "global_fit_enabled") {
+    global_fit_enabled = (value != 0);
+  } else if (param == "global_fit_max_evals") {
+    global_fit_max_evals = value;
+  } else if (param == "global_fit_float_npe") {
+    global_fit_float_npe = (value != 0);
   } else {
     throw Processor::ParamUnknown(param);
   }
@@ -159,6 +193,162 @@ void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer
       fW(row, col) = -template_val;
     }
   }
+}
+
+double WaveformAnalysisRAVEN::EvaluateTemplate(double sample_time_ns, double delay_ns) const {
+  const double mag_factor = vpe_charge * fTermOhms;
+  double template_val = 0.0;
+  if (template_type == 0) {  // lognormal
+    double shift = delay_ns - lognormal_scale;
+    if (sample_time_ns > shift) {
+      template_val = mag_factor * TMath::LogNormal(sample_time_ns, lognormal_shape, shift, lognormal_scale);
+    }
+  } else {  // gaussian
+    template_val = mag_factor * TMath::Gaus(sample_time_ns, delay_ns, gaussian_width, kTRUE);
+  }
+  return -template_val;  // negative sign matches dictionary convention
+}
+
+double WaveformAnalysisRAVEN::ComputeModelChi2(const TVectorD& region_vec,
+                                               const std::vector<std::pair<double, double>>& weights,
+                                               int start_sample) const {
+  const int n = region_vec.GetNrows();
+  double chi2 = 0.0;
+  for (int s = 0; s < n; ++s) {
+    const double sample_time = (start_sample + s) * fTimeStep;
+    double model = 0.0;
+    for (const auto& [t, w] : weights) {
+      model += w * EvaluateTemplate(sample_time, t);
+    }
+    const double r = region_vec(s) - model;
+    chi2 += r * r;
+  }
+  const int dof = std::max(1, n - static_cast<int>(weights.size()));
+  return chi2 / dof;
+}
+
+std::vector<std::pair<double, double>> WaveformAnalysisRAVEN::GlobalFitWeights(
+    const TVectorD& region_vec, const std::vector<std::pair<double, double>>& initial_weights, int start_sample,
+    double& chi2ndf_out, int& npe_delta_out) {
+#if NLOPT_Enabled
+  const int N = static_cast<int>(initial_weights.size());
+  if (N == 0) return initial_weights;
+
+  // Helper: run NLOPT on a candidate set of (time, weight) pairs.
+  // Returns the optimised pairs, or the input unchanged on failure.
+  auto run_nlopt = [&](const std::vector<std::pair<double, double>>& cands) -> std::vector<std::pair<double, double>> {
+    const int M = static_cast<int>(cands.size());
+    if (M == 0) return cands;
+
+    // Parameter layout: x[0..M-1] = times, x[M..2M-1] = weights
+    std::vector<double> x(2 * M), lb(2 * M), ub(2 * M);
+    for (int i = 0; i < M; ++i) {
+      x[i] = cands[i].first;
+      x[M + i] = cands[i].second;
+      lb[i] = cands[i].first - global_fit_time_window;
+      ub[i] = cands[i].first + global_fit_time_window;
+      lb[M + i] = 0.0;
+      ub[M + i] = cands[i].second * global_fit_weight_max_scale;
+    }
+
+    try {
+      nlopt::opt opt(global_fit_algo.c_str(), 2 * M);
+      opt.set_lower_bounds(lb);
+      opt.set_upper_bounds(ub);
+      opt.set_maxeval(global_fit_max_evals);
+      opt.set_xtol_rel(global_fit_tolerance);
+
+      auto objective = [&](unsigned /*n*/, const double* xv, double* /*grad*/) -> double {
+        std::vector<std::pair<double, double>> tmp(M);
+        for (int i = 0; i < M; ++i) tmp[i] = {xv[i], xv[M + i]};
+        return ComputeModelChi2(region_vec, tmp, start_sample);
+      };
+      opt.set_min_objective(objective);
+
+      double min_val;
+      opt.optimize(x, min_val);
+    } catch (const std::exception& e) {
+      debug << "WaveformAnalysisRAVEN: GlobalFit NLOPT exception: " << e.what() << newline;
+      return cands;  // return unchanged on failure
+    }
+
+    std::vector<std::pair<double, double>> result(M);
+    for (int i = 0; i < M; ++i) result[i] = {x[i], x[M + i]};
+    return result;
+  };
+
+  // ── 1. Continuous optimisation of the N-PE solution ─────────────────────
+  std::vector<std::pair<double, double>> best = run_nlopt(initial_weights);
+  double best_chi2 = ComputeModelChi2(region_vec, best, start_sample);
+  npe_delta_out = 0;
+
+  if (!global_fit_float_npe) {
+    chi2ndf_out = best_chi2;
+    return best;
+  }
+
+  // ── 2. Try N-1 (remove the weakest PE) ──────────────────────────────────
+  if (N > 1) {
+    // Find PE with minimum weight in the current best solution
+    int weakest = 0;
+    for (int i = 1; i < N; ++i) {
+      if (best[i].second < best[weakest].second) weakest = i;
+    }
+    std::vector<std::pair<double, double>> cands_nm1;
+    cands_nm1.reserve(N - 1);
+    for (int i = 0; i < N; ++i) {
+      if (i != weakest) cands_nm1.push_back(best[i]);
+    }
+    std::vector<std::pair<double, double>> opt_nm1 = run_nlopt(cands_nm1);
+    double chi2_nm1 = ComputeModelChi2(region_vec, opt_nm1, start_sample);
+    if (chi2_nm1 < best_chi2) {
+      best_chi2 = chi2_nm1;
+      best = opt_nm1;
+      npe_delta_out = -1;
+    }
+  }
+
+  // ── 3. Try N+1 (add a PE at the largest residual) ───────────────────────
+  {
+    // Compute residual of current best solution
+    const int n_samples = region_vec.GetNrows();
+    int peak_sample = 0;
+    double peak_abs_residual = 0.0;
+    for (int s = 0; s < n_samples; ++s) {
+      const double sample_time = (start_sample + s) * fTimeStep;
+      double model = 0.0;
+      for (const auto& [t, w] : best) model += w * EvaluateTemplate(sample_time, t);
+      const double abs_res = std::abs(region_vec(s) - model);
+      if (abs_res > peak_abs_residual) {
+        peak_abs_residual = abs_res;
+        peak_sample = s;
+      }
+    }
+    const double new_time = (start_sample + peak_sample) * fTimeStep;
+    // Seed the new PE weight from the residual amplitude divided by template peak.
+    // Fall back to weight_threshold if the template evaluates to zero.
+    const double tmpl_peak = std::abs(EvaluateTemplate(new_time, new_time));
+    const double new_weight = (tmpl_peak > 0.0) ? (peak_abs_residual / tmpl_peak) : weight_threshold;
+
+    std::vector<std::pair<double, double>> cands_np1 = best;
+    cands_np1.emplace_back(new_time, new_weight);
+    std::vector<std::pair<double, double>> opt_np1 = run_nlopt(cands_np1);
+    double chi2_np1 = ComputeModelChi2(region_vec, opt_np1, start_sample);
+    if (chi2_np1 < best_chi2) {
+      best_chi2 = chi2_np1;
+      best = opt_np1;
+      npe_delta_out = +1;
+    }
+  }
+
+  chi2ndf_out = best_chi2;
+  return best;
+
+#else
+  // NLOPT not available — return unchanged
+  npe_delta_out = 0;
+  return initial_weights;
+#endif
 }
 
 void WaveformAnalysisRAVEN::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t>& digitWfm) {
@@ -401,9 +591,19 @@ void WaveformAnalysisRAVEN::ProcessThresholdRegion(const std::vector<double>& vo
   int iterations_ran;
   TVectorD region_weights = Thresholded_rsNNLS(W_region, region_vec, weight_threshold, chi2ndf, iterations_ran);
 
-  // Extract PEs from significant weights
-  ExtractPhotoelectrons(region_weights, dict_start, dict_cols, start_sample, end_sample, chi2ndf, iterations_ran,
-                        fit_result, gain_calibration);
+  // Merge nearby weights (previously done inside ExtractPhotoelectrons)
+  std::vector<std::pair<double, double>> merged =
+      MergeNearbyWeights(region_weights, dict_start, dict_cols, weight_merge_window);
+
+  // Optional global fit: refine times and charges, optionally vary PE count by ±1
+  int npe_delta = 0;
+  if (global_fit_enabled && !merged.empty()) {
+    merged = GlobalFitWeights(region_vec, merged, start_sample, chi2ndf, npe_delta);
+  }
+
+  // Extract PEs from the (possibly refined) merged weights
+  ExtractPhotoelectronsFromMerged(merged, start_sample, end_sample, chi2ndf, iterations_ran, npe_delta, fit_result,
+                                  gain_calibration);
 }
 
 std::vector<std::pair<double, double>> WaveformAnalysisRAVEN::MergeNearbyWeights(const TVectorD& region_weights,
@@ -461,16 +661,19 @@ std::vector<std::pair<double, double>> WaveformAnalysisRAVEN::MergeNearbyWeights
 void WaveformAnalysisRAVEN::ExtractPhotoelectrons(const TVectorD& region_weights, int dict_start, int dict_cols,
                                                   int start_sample, int end_sample, double chi2ndf, int iterations_ran,
                                                   DS::WaveformAnalysisResult* fit_result, double gain_calibration) {
-  // Merge nearby weights to prevent PE overcounting from weight splitting
   std::vector<std::pair<double, double>> merged_weights =
       MergeNearbyWeights(region_weights, dict_start, dict_cols, weight_merge_window);
+  ExtractPhotoelectronsFromMerged(merged_weights, start_sample, end_sample, chi2ndf, iterations_ran, 0, fit_result,
+                                  gain_calibration);
+}
 
-  // Sanity check parameters
-  double template_scale = (template_type == 0) ? lognormal_scale : gaussian_width;
-  double region_start_time = start_sample * fTimeStep;
-  double region_end_time = end_sample * fTimeStep;
+void WaveformAnalysisRAVEN::ExtractPhotoelectronsFromMerged(
+    const std::vector<std::pair<double, double>>& merged_weights, int start_sample, int end_sample, double chi2ndf,
+    int iterations_ran, int global_fit_npe_delta, DS::WaveformAnalysisResult* fit_result, double gain_calibration) {
+  const double template_scale = (template_type == 0) ? lognormal_scale : gaussian_width;
+  const double region_start_time = start_sample * fTimeStep;
+  const double region_end_time = end_sample * fTimeStep;
 
-  // Extract PEs from merged weights
   for (const auto& [delay, weight] : merged_weights) {
     // Sanity check - ensure PE time is within expected range
     if (delay < region_start_time - 3.0 * template_scale || delay > region_end_time + 3.0 * template_scale) {
@@ -481,24 +684,31 @@ void WaveformAnalysisRAVEN::ExtractPhotoelectrons(const TVectorD& region_weights
     }
 
     // Charge calculation: apply gain calibration
-    double pe_charge = weight * vpe_charge * gain_calibration;  // Charge in pC
+    const double pe_charge = weight * vpe_charge * gain_calibration;  // Charge in pC
 
     // Estimate number of PEs using likelihood method
-    // Use calibrated vpe_charge so expected charge per PE matches the scale of pe_charge
-    double calibrated_vpe_charge = vpe_charge * gain_calibration;
-    size_t npe = npe_estimate
-                     ? EstimateNPE(pe_charge, calibrated_vpe_charge, npe_estimate_charge_width, npe_estimate_max_pes)
+    const double calibrated_vpe_charge = vpe_charge * gain_calibration;
+    const size_t npe =
+        npe_estimate ? EstimateNPE(pe_charge, calibrated_vpe_charge, npe_estimate_charge_width, npe_estimate_max_pes)
                      : 1;
+
+    // Build FOM map — include global fit entries only when the global fit ran
+    std::map<std::string, Double_t> foms = {
+        {"chi2ndf", chi2ndf},
+        {"iterations_ran", static_cast<double>(iterations_ran)},
+        {"weight", weight / npe},
+        {"estimated_npe", static_cast<double>(npe)},
+    };
+    if (global_fit_enabled) {
+      foms["global_fit_chi2ndf"] = chi2ndf;
+      if (global_fit_float_npe) {
+        foms["global_fit_npe_delta"] = static_cast<double>(global_fit_npe_delta);
+      }
+    }
 
     // Add each estimated PE with divided charge
     for (size_t ipe = 0; ipe < npe; ++ipe) {
-      fit_result->AddPE(delay, pe_charge / npe,
-                        {
-                            {"chi2ndf", chi2ndf},
-                            {"iterations_ran", static_cast<double>(iterations_ran)},
-                            {"weight", weight / npe},
-                            {"estimated_npe", static_cast<double>(npe)},
-                        });
+      fit_result->AddPE(delay, pe_charge / npe, foms);
     }
   }
 }

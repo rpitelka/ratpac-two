@@ -177,7 +177,7 @@
 // and counted multiple times. Set to 0 to disable merging.
 "weight_merge_window": 2,
 
-// if true, perform a final NPE estimation on all resolved wave packet in the deconvolved 
+// if true, perform a final NPE estimation on all resolved wave packet in the deconvolved
 // waveform. Estimate the number of PEs in each packet using a gaussian PDF on charge.
 // The mean of the single PE charge distribution is centered around `vpe_charge`.
 "npe_estimate": true,
@@ -190,4 +190,20 @@
 // if total charge in waveform is between these values.
 // min_total_charge = -50.,
 // max_total_charge = 500.
+
+// Global fit: optional NLOPT refinement of PE times and charges after rsNNLS.
+// Requires NLOPT to be available at build time; silently disabled otherwise.
+"global_fit_enabled": false,
+// NLOPT algorithm to use (gradient-free only: LN_* or GN_*).
+"global_fit_algo": "LN_BOBYQA",
+// Half-width of the time window (ns) within which each PE time is allowed to float.
+"global_fit_time_window": 2.0,
+// Upper bound on each weight = initial_weight * this scale factor.
+"global_fit_weight_max_scale": 3.0,
+// Maximum NLOPT function evaluations per region.
+"global_fit_max_evals": 1000,
+// NLOPT relative parameter-change tolerance for convergence.
+"global_fit_tolerance": 1e-6,
+// If true, also try N-1 and N+1 PE configurations and keep the one with the best chi2/ndf.
+"global_fit_float_npe": false,
 }

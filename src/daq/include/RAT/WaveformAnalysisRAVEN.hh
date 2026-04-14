@@ -39,6 +39,7 @@
 #include <RAT/Digitizer.hh>
 #include <RAT/Processor.hh>
 #include <RAT/WaveformAnalyzerBase.hh>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -99,6 +100,15 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   int cached_nsamples;             ///< Cached number of samples for dictionary
   double cached_digitizer_period;  ///< Cached digitizer period for dictionary
 
+  // Global fit configuration
+  bool global_fit_enabled;             ///< Enable NLOPT global fit after rsNNLS
+  std::string global_fit_algo;         ///< NLOPT algorithm name (gradient-free only)
+  double global_fit_time_window;       ///< Half-width (ns) of time float window per PE
+  double global_fit_weight_max_scale;  ///< Upper bound on weight = initial * this factor
+  int global_fit_max_evals;            ///< Max NLOPT function evaluations per region
+  double global_fit_tolerance;         ///< NLOPT xtol_rel convergence criterion
+  bool global_fit_float_npe;           ///< Try N-1 and N+1 PE configurations
+
   void DoAnalysis(DS::DigitPMT *digitpmt, const std::vector<UShort_t> &digitWfm) override;
 
   /// Perform reverse sparse NNLS with iterative thresholding on a region submatrix
@@ -113,15 +123,35 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   void ProcessThresholdRegion(const std::vector<double> &voltWfm, int start_sample, int end_sample,
                               DS::WaveformAnalysisResult *fit_result, double gain_calibration);
 
-  /// Extract photoelectrons from significant weights in the region
+  /// Extract photoelectrons from significant weights in the region.
+  /// Calls MergeNearbyWeights internally then delegates to ExtractPhotoelectronsFromMerged.
   void ExtractPhotoelectrons(const TVectorD &region_weights, int dict_start, int dict_cols, int start_sample,
                              int end_sample, double chi2ndf, int iterations_ran, DS::WaveformAnalysisResult *fit_result,
                              double gain_calibration);
+
+  /// Extract photoelectrons from pre-merged (time_ns, weight) pairs.
+  void ExtractPhotoelectronsFromMerged(const std::vector<std::pair<double, double>> &merged_weights, int start_sample,
+                                       int end_sample, double chi2ndf, int iterations_ran, int global_fit_npe_delta,
+                                       DS::WaveformAnalysisResult *fit_result, double gain_calibration);
 
   /// Merge nearby weights within a time window to prevent PE overcounting
   /// Returns vector of (time, merged_weight) pairs
   std::vector<std::pair<double, double>> MergeNearbyWeights(const TVectorD &region_weights, int dict_start,
                                                             int dict_cols, double merge_window);
+
+  /// Evaluate the SPE template at sample_time_ns for a PE arriving at delay_ns.
+  /// Returns the signed voltage contribution (negative, matching dictionary convention).
+  double EvaluateTemplate(double sample_time_ns, double delay_ns) const;
+
+  /// Compute chi2/ndf between region_vec and the model reconstructed from weights.
+  double ComputeModelChi2(const TVectorD &region_vec, const std::vector<std::pair<double, double>> &weights,
+                          int start_sample) const;
+
+  /// Run NLOPT global fit to refine (time, weight) pairs against the observed region voltage.
+  /// Updates chi2ndf_out with the post-fit chi2/ndf. Returns the refined weights.
+  std::vector<std::pair<double, double>> GlobalFitWeights(const TVectorD &region_vec,
+                                                          const std::vector<std::pair<double, double>> &initial_weights,
+                                                          int start_sample, double &chi2ndf_out, int &npe_delta_out);
 };
 
 }  // namespace RAT
