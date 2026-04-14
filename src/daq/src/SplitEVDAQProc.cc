@@ -18,17 +18,17 @@ void SplitEVDAQProc::BeginOfRun(DS::Run *run) {
 
   ldaq = DB::Get()->GetLink("DAQ", "SplitEVDAQ");
   fEventCounter = 0;
-  fPulseWidth = ldaq->GetD("pulse_width");
-  fTriggerThreshold = ldaq->GetD("trigger_threshold");
-  fTriggerWindow = ldaq->GetD("trigger_window");
-  fPmtLockout = ldaq->GetD("pmt_lockout");
-  fTriggerLockout = ldaq->GetD("trigger_lockout");
-  fTriggerResolution = ldaq->GetD("trigger_resolution");
-  fLookback = ldaq->GetD("lookback");
-  fMaxHitTime = ldaq->GetD("max_hit_time");
-  fTriggerOnNoise = ldaq->GetI("trigger_on_noise");
-  fDigitizerType = ldaq->GetS("digitizer_name");
-  fDigitize = ldaq->GetZ("digitize");
+  if (!fUserSetParams.count("pulse_width")) fPulseWidth = ldaq->GetD("pulse_width");
+  if (!fUserSetParams.count("trigger_threshold")) fTriggerThreshold = ldaq->GetD("trigger_threshold");
+  if (!fUserSetParams.count("trigger_window")) fTriggerWindow = ldaq->GetD("trigger_window");
+  if (!fUserSetParams.count("pmt_lockout")) fPmtLockout = ldaq->GetD("pmt_lockout");
+  if (!fUserSetParams.count("trigger_lockout")) fTriggerLockout = ldaq->GetD("trigger_lockout");
+  if (!fUserSetParams.count("trigger_resolution")) fTriggerResolution = ldaq->GetD("trigger_resolution");
+  if (!fUserSetParams.count("lookback")) fLookback = ldaq->GetD("lookback");
+  if (!fUserSetParams.count("max_hit_time")) fMaxHitTime = ldaq->GetD("max_hit_time");
+  if (!fUserSetParams.count("trigger_on_noise")) fTriggerOnNoise = ldaq->GetI("trigger_on_noise");
+  if (!fUserSetParams.count("digitizer_name")) fDigitizerType = ldaq->GetS("digitizer_name");
+  if (!fUserSetParams.count("digitize")) fDigitize = ldaq->GetZ("digitize");
 
   fDigitizer = new Digitizer(fDigitizerType);
   if (fDigitize) {
@@ -198,6 +198,7 @@ void SplitEVDAQProc::SetD(std::string param, double value) {
     fMaxHitTime = value;
   else
     throw ParamUnknown(param);
+  fUserSetParams.insert(param);
 }
 
 void SplitEVDAQProc::SetI(std::string param, int value) {
@@ -205,6 +206,7 @@ void SplitEVDAQProc::SetI(std::string param, int value) {
     fTriggerOnNoise = value;
   else
     throw ParamUnknown(param);
+  fUserSetParams.insert(param);
 }
 
 }  // namespace RAT

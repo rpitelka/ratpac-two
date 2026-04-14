@@ -11,6 +11,8 @@
 #define __RAT_WaveformAnalyzerBase__
 
 #include <limits>
+#include <set>
+#include <string>
 #include <vector>
 
 #include "RAT/DS/Digit.hh"
@@ -117,6 +119,9 @@ class WaveformAnalyzerBase : public Processor {
   // Charge thresholds: skip analysis if digitized total charge is outside [fMinTotalCharge, fMaxTotalCharge] (pC).
   double fMinTotalCharge = std::numeric_limits<double>::lowest();
   double fMaxTotalCharge = std::numeric_limits<double>::max();
+
+  // Tracks parameters explicitly set via /rat/procset, so Configure() does not overwrite them.
+  std::set<std::string> fUserSetParams;
 };
 
 }  // namespace RAT

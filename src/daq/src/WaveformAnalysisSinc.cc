@@ -14,11 +14,11 @@ namespace RAT {
 void WaveformAnalysisSinc::Configure(const std::string& config_name) {
   try {
     fDigit = DB::Get()->GetLink("DIGITIZER_ANALYSIS", config_name);
-    fFitWindowLow = fDigit->GetD("fit_window_low");
-    fFitWindowHigh = fDigit->GetD("fit_window_high");
-    fNumInterpPoints = fDigit->GetI("num_interp_points");
-    fTaperingConst = fDigit->GetD("tapering_constant");
-    fNumSincLobes = fDigit->GetI("num_sinc_lobes");
+    if (!fUserSetParams.count("fit_window_low")) fFitWindowLow = fDigit->GetD("fit_window_low");
+    if (!fUserSetParams.count("fit_window_high")) fFitWindowHigh = fDigit->GetD("fit_window_high");
+    if (!fUserSetParams.count("num_interp_points")) fNumInterpPoints = fDigit->GetI("num_interp_points");
+    if (!fUserSetParams.count("tapering_constant")) fTaperingConst = fDigit->GetD("tapering_constant");
+    if (!fUserSetParams.count("num_sinc_lobes")) fNumSincLobes = fDigit->GetI("num_sinc_lobes");
   } catch (DBNotFoundError) {
     RAT::Log::Die("WaveformAnalysisSinc: Unable to find analysis parameters.");
   }
@@ -33,6 +33,7 @@ void WaveformAnalysisSinc::SetI(std::string param, int value) {
   } else {
     throw Processor::ParamUnknown(param);
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformAnalysisSinc::SetD(std::string param, double value) {
@@ -44,7 +45,9 @@ void WaveformAnalysisSinc::SetD(std::string param, double value) {
     fTaperingConst = value;
   } else {
     WaveformAnalyzerBase::SetD(param, value);
+    return;  // base class inserts into fUserSetParams
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformAnalysisSinc::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t>& digitWfm) {

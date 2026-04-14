@@ -16,12 +16,12 @@ NoiseProc::NoiseProc() : Processor("noise") {}
 void NoiseProc::BeginOfRun(DS::Run *run) {
   DBLinkPtr lnoise = DB::Get()->GetLink("NOISEPROC");
 
-  fNoiseFlag = lnoise->GetI("noise_flag");
-  fDefaultNoiseRate = lnoise->GetD("default_noise_rate");
-  fLookback = lnoise->GetD("noise_lookback");
-  fLookforward = lnoise->GetD("noise_lookforward");
-  fMaxTime = lnoise->GetD("noise_maxtime");
-  fNearHits = lnoise->GetI("noise_nearhits");
+  if (!fUserSetParams.count("flag")) fNoiseFlag = lnoise->GetI("noise_flag");
+  if (!fUserSetParams.count("rate")) fDefaultNoiseRate = lnoise->GetD("default_noise_rate");
+  if (!fUserSetParams.count("lookback")) fLookback = lnoise->GetD("noise_lookback");
+  if (!fUserSetParams.count("lookforward")) fLookforward = lnoise->GetD("noise_lookforward");
+  if (!fUserSetParams.count("maxtime")) fMaxTime = lnoise->GetD("noise_maxtime");
+  if (!fUserSetParams.count("nearhits")) fNearHits = lnoise->GetI("noise_nearhits");
 
   DS::PMTInfo *pmtinfo = run->GetPMTInfo();
   UpdatePMTModels(pmtinfo);
@@ -265,6 +265,7 @@ void NoiseProc::SetD(std::string param, double value) {
   } else {
     throw ParamUnknown(param);
   }
+  fUserSetParams.insert(param);
 }
 
 void NoiseProc::SetI(std::string param, int value) {
@@ -275,6 +276,7 @@ void NoiseProc::SetI(std::string param, int value) {
   } else {
     throw ParamUnknown(param);
   }
+  fUserSetParams.insert(param);
 }
 
 }  // namespace RAT

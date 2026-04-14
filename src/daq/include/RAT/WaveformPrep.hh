@@ -25,6 +25,8 @@
 #include <RAT/DS/DigitPMT.hh>
 #include <RAT/Digitizer.hh>
 #include <RAT/Processor.hh>
+#include <set>
+#include <string>
 #include <vector>
 
 namespace RAT {
@@ -72,6 +74,9 @@ class WaveformPrep : public Processor {
   // Use Cable offsets specified in channel status?
   int fApplyCableOffset;
   int fZeroSuppress;
+
+  // Tracks parameters explicitly set via /rat/procset, so Configure() does not overwrite them.
+  std::set<std::string> fUserSetParams;
 
   void DoAnalysis(DS::DigitPMT *pmt, const std::vector<UShort_t> &DigitWfm, double timeOffset);
 };

@@ -4,6 +4,7 @@
 #include <RAT/DB.hh>
 #include <RAT/Digitizer.hh>
 #include <RAT/Processor.hh>
+#include <set>
 #include <string>
 
 namespace RAT {
@@ -35,6 +36,8 @@ class SplitEVDAQProc : public Processor {
 
   Digitizer *fDigitizer;
   std::string fDigitizerType;
+
+  std::set<std::string> fUserSetParams;
 };
 
 }  // namespace RAT

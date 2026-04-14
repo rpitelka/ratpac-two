@@ -18,17 +18,17 @@ WaveformPrep::WaveformPrep(std::string analyzer_name) : Processor("WaveformPrep"
 void WaveformPrep::Configure(const std::string& analyzer_name) {
   try {
     fDigit = DB::Get()->GetLink("DIGITIZER_ANALYSIS", analyzer_name);
-    fPedWindowLow = fDigit->GetI("pedestal_window_low");
-    fPedWindowHigh = fDigit->GetI("pedestal_window_high");
-    fLookback = fDigit->GetD("lookback");
-    fIntWindowLow = fDigit->GetD("integration_window_low");
-    fIntWindowHigh = fDigit->GetD("integration_window_high");
-    fConstFrac = fDigit->GetD("constant_fraction");
-    fThreshold = fDigit->GetD("voltage_threshold");
-    fSlidingWindow = fDigit->GetD("sliding_window_width");
-    fChargeThresh = fDigit->GetD("sliding_window_thresh");
-    fApplyCableOffset = fDigit->GetI("apply_cable_offset");
-    fZeroSuppress = fDigit->GetI("zero_suppress");
+    if (!fUserSetParams.count("pedestal_window_low")) fPedWindowLow = fDigit->GetI("pedestal_window_low");
+    if (!fUserSetParams.count("pedestal_window_high")) fPedWindowHigh = fDigit->GetI("pedestal_window_high");
+    if (!fUserSetParams.count("lookback")) fLookback = fDigit->GetD("lookback");
+    if (!fUserSetParams.count("integration_window_low")) fIntWindowLow = fDigit->GetD("integration_window_low");
+    if (!fUserSetParams.count("integration_window_high")) fIntWindowHigh = fDigit->GetD("integration_window_high");
+    if (!fUserSetParams.count("constant_fraction")) fConstFrac = fDigit->GetD("constant_fraction");
+    if (!fUserSetParams.count("voltage_threshold")) fThreshold = fDigit->GetD("voltage_threshold");
+    if (!fUserSetParams.count("sliding_window_width")) fSlidingWindow = fDigit->GetD("sliding_window_width");
+    if (!fUserSetParams.count("sliding_window_thresh")) fChargeThresh = fDigit->GetD("sliding_window_thresh");
+    if (!fUserSetParams.count("apply_cable_offset")) fApplyCableOffset = fDigit->GetI("apply_cable_offset");
+    if (!fUserSetParams.count("zero_suppress")) fZeroSuppress = fDigit->GetI("zero_suppress");
   } catch (DBNotFoundError) {
     RAT::Log::Die("WaveformAnalysis: Unable to find analysis parameters.");
   }
@@ -54,6 +54,7 @@ void WaveformPrep::SetI(std::string param, int value) {
   } else {
     throw Processor::ParamUnknown(param);
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformPrep::SetD(std::string param, double value) {
@@ -74,6 +75,7 @@ void WaveformPrep::SetD(std::string param, double value) {
   } else {
     throw Processor::ParamUnknown(param);
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformPrep::ZeroSuppress(DS::EV* ev, DS::DigitPMT* digitpmt, int pmtID) {

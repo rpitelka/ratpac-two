@@ -13,17 +13,17 @@ namespace RAT {
 void WaveformAnalysisLognormal::Configure(const std::string& config_name) {
   try {
     fDigit = DB::Get()->GetLink("DIGITIZER_ANALYSIS", config_name);
-    fFitWindowLow = fDigit->GetD("fit_window_low");
-    fFitWindowHigh = fDigit->GetD("fit_window_high");
-    fFitShape = fDigit->GetD("lognormal_shape");
-    fFitScale = fDigit->GetD("lognormal_scale");
+    if (!fUserSetParams.count("fit_window_low")) fFitWindowLow = fDigit->GetD("fit_window_low");
+    if (!fUserSetParams.count("fit_window_high")) fFitWindowHigh = fDigit->GetD("fit_window_high");
+    if (!fUserSetParams.count("lognormal_shape")) fFitShape = fDigit->GetD("lognormal_shape");
+    if (!fUserSetParams.count("lognormal_scale")) fFitScale = fDigit->GetD("lognormal_scale");
     // Charge threshold configuration (optional, falls back to base class defaults)
     try {
-      fMinTotalCharge = fDigit->GetD("min_total_charge");
+      if (!fUserSetParams.count("min_total_charge")) fMinTotalCharge = fDigit->GetD("min_total_charge");
     } catch (DBNotFoundError) {
     }
     try {
-      fMaxTotalCharge = fDigit->GetD("max_total_charge");
+      if (!fUserSetParams.count("max_total_charge")) fMaxTotalCharge = fDigit->GetD("max_total_charge");
     } catch (DBNotFoundError) {
     }
   } catch (DBNotFoundError) {
@@ -42,7 +42,9 @@ void WaveformAnalysisLognormal::SetD(std::string param, double value) {
     fFitScale = value;
   } else {
     WaveformAnalyzerBase::SetD(param, value);
+    return;  // base class inserts into fUserSetParams
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformAnalysisLognormal::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t>& digitWfm) {

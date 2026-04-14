@@ -58,6 +58,7 @@ void WaveformAnalyzerBase::SetD(std::string param, double value) {
   } else {
     throw Processor::ParamUnknown(param);
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformAnalyzerBase::SetI(std::string param, int value) { throw Processor::ParamUnknown(param); }

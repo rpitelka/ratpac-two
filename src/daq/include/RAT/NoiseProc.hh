@@ -6,6 +6,7 @@
 #include <RAT/PMTTime.hh>
 #include <RAT/Processor.hh>
 #include <map>
+#include <set>
 
 namespace RAT {
 
@@ -34,6 +35,7 @@ class NoiseProc : public Processor {
   std::vector<RAT::PMTTime *> fPMTTime;
   std::vector<RAT::PMTCharge *> fPMTCharge;
   std::map<std::string, double> fModelNoiseMap;
+  std::set<std::string> fUserSetParams;
 };
 
 }  // namespace RAT

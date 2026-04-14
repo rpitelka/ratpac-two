@@ -25,41 +25,43 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
     fDigit = DB::Get()->GetLink("DIGITIZER_ANALYSIS", config_name);
 
     // Threshold crossing region configuration
-    process_threshold_crossing = (fDigit->GetI("process_threshold_crossing") != 0);  // 0=no, 1=yes
+    if (!fUserSetParams.count("process_threshold_crossing"))
+      process_threshold_crossing = (fDigit->GetI("process_threshold_crossing") != 0);
     if (process_threshold_crossing) {
-      voltage_threshold = fDigit->GetD("voltage_threshold");      // Voltage threshold in mV
-      threshold_region_padding = fDigit->GetI("region_padding");  // Padding samples around threshold crossing
+      if (!fUserSetParams.count("voltage_threshold")) voltage_threshold = fDigit->GetD("voltage_threshold");
+      if (!fUserSetParams.count("region_padding")) threshold_region_padding = fDigit->GetI("region_padding");
     }
 
     // Template type configuration
-    template_type = fDigit->GetI("raven_template_type");  // 0=lognormal, 1=gaussian
+    if (!fUserSetParams.count("raven_template_type")) template_type = fDigit->GetI("raven_template_type");
 
     // Single photoelectron waveform parameters
-    if (template_type == 0) {                             // lognormal
-      lognormal_scale = fDigit->GetD("lognormal_scale");  // LogNormal 'm' parameter
-      lognormal_shape = fDigit->GetD("lognormal_shape");  // LogNormal 'sigma' parameter
-    } else if (template_type == 1) {                      // gaussian
-      gaussian_width = fDigit->GetD("gaussian_width");    // Gaussian 'sigma' parameter
+    if (template_type == 0) {  // lognormal
+      if (!fUserSetParams.count("lognormal_scale")) lognormal_scale = fDigit->GetD("lognormal_scale");
+      if (!fUserSetParams.count("lognormal_shape")) lognormal_shape = fDigit->GetD("lognormal_shape");
+    } else if (template_type == 1) {  // gaussian
+      if (!fUserSetParams.count("gaussian_width")) gaussian_width = fDigit->GetD("gaussian_width");
     } else {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid template_type " + std::to_string(template_type) +
                     ". Must be 0 (lognormal) or 1 (gaussian).");
     }
 
-    vpe_charge = fDigit->GetD("vpe_charge");  // Nominal PE charge in pC
+    if (!fUserSetParams.count("vpe_charge")) vpe_charge = fDigit->GetD("vpe_charge");
 
     // Algorithm configuration
-    max_iterations = fDigit->GetI("max_iterations");      // Max thresholding iterations
-    weight_threshold = fDigit->GetD("weight_threshold");  // Component significance threshold
-    upsample_factor = fDigit->GetD("upsampling_factor");  // Dictionary upsampling factor
-    epsilon = fDigit->GetD("nnls_tolerance");             // NNLS convergence tolerance
+    if (!fUserSetParams.count("max_iterations")) max_iterations = fDigit->GetI("max_iterations");
+    if (!fUserSetParams.count("weight_threshold")) weight_threshold = fDigit->GetD("weight_threshold");
+    if (!fUserSetParams.count("upsampling_factor")) upsample_factor = fDigit->GetD("upsampling_factor");
+    if (!fUserSetParams.count("nnls_tolerance")) epsilon = fDigit->GetD("nnls_tolerance");
 
     // NPE estimation configuration
-    npe_estimate = fDigit->GetZ("npe_estimate");
-    npe_estimate_charge_width = fDigit->GetD("npe_estimate_charge_width");
-    npe_estimate_max_pes = fDigit->GetI("npe_estimate_max_pes");
+    if (!fUserSetParams.count("npe_estimate")) npe_estimate = fDigit->GetZ("npe_estimate");
+    if (!fUserSetParams.count("npe_estimate_charge_width"))
+      npe_estimate_charge_width = fDigit->GetD("npe_estimate_charge_width");
+    if (!fUserSetParams.count("npe_estimate_max_pes")) npe_estimate_max_pes = fDigit->GetI("npe_estimate_max_pes");
 
     // Weight merging configuration
-    weight_merge_window = fDigit->GetD("weight_merge_window");  // Time window for merging nearby weights (ns)
+    if (!fUserSetParams.count("weight_merge_window")) weight_merge_window = fDigit->GetD("weight_merge_window");
 
     // Validate critical parameters
     if (upsample_factor <= 0) {
@@ -99,7 +101,9 @@ void WaveformAnalysisRAVEN::SetD(std::string param, double value) {
     weight_merge_window = value;
   } else {
     WaveformAnalyzerBase::SetD(param, value);
+    return;  // base class inserts into fUserSetParams
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
@@ -120,6 +124,7 @@ void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
   } else {
     throw Processor::ParamUnknown(param);
   }
+  fUserSetParams.insert(param);
 }
 
 void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer_period) {
