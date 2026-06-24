@@ -299,9 +299,9 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
     }
   }
 
-  // Ensure numerical stability
+  // Ensure all components below threshold are set to zero
   for (int j = 0; j < K; ++j) {
-    if (h_full(j) < 0.0) h_full(j) = 0.0;
+    if (h_full(j) < threshold) h_full(j) = 0.0;
   }
 
   end = std::chrono::high_resolution_clock::now();
