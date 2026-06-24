@@ -9,6 +9,7 @@
 #include <RAT/NPEEstimator.hh>
 #include <RAT/WaveformAnalysisRAVEN.hh>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 #include "RAT/DS/DigitPMT.hh"
@@ -133,6 +134,8 @@ void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer
   debug << "WaveformAnalysisRAVEN: Dictionary size: " << nsamples << " x "
         << static_cast<int>(nsamples * upsample_factor) << newline;
 
+  auto start = std::chrono::high_resolution_clock::now();
+
   const int dict_size = static_cast<int>(nsamples * upsample_factor);
   fW.ResizeTo(nsamples, dict_size);
   fW.Zero();
@@ -159,6 +162,10 @@ void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer
       fW(row, col) = -template_val;
     }
   }
+
+  auto end = std::chrono::high_resolution_clock::now();
+  debug << "WaveformAnalysisRAVEN: Dictionary built in "
+        << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << newline;
 }
 
 void WaveformAnalysisRAVEN::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t>& digitWfm) {
@@ -232,9 +239,13 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
   }
 
   // Initial NNLS solve
+  auto start = std::chrono::high_resolution_clock::now();
   TVectorD h_full(K);
   h_full.Zero();
   h_full = Math::NNLS_LawsonHanson(W_region, voltVec, epsilon, 0, 0);
+  auto end = std::chrono::high_resolution_clock::now();
+  debug << "WaveformAnalysisRAVEN: Initial NNLS solve completed in "
+        << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms" << newline;
 
   // Build initial active set
   std::vector<int> P;
@@ -254,6 +265,7 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
   };
 
   // Iterative thresholding
+  start = std::chrono::high_resolution_clock::now();
   int local_iterations_ran = 0;
 
   for (size_t iter = 0; iter < max_iterations && !P.empty(); ++iter) {
@@ -291,6 +303,11 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
   for (int j = 0; j < K; ++j) {
     if (h_full(j) < 0.0) h_full(j) = 0.0;
   }
+
+  end = std::chrono::high_resolution_clock::now();
+  debug << "WaveformAnalysisRAVEN: Thresholded rsNNLS completed in "
+        << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " ms with "
+        << local_iterations_ran << " iterations" << newline;
 
   // Calculate chi-squared goodness of fit
   TVectorD fitted = W_region * h_full;
