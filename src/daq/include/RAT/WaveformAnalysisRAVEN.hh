@@ -89,6 +89,21 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   double weight_threshold;     ///< Minimum weight threshold for component significance
   double weight_merge_window;  ///< Time window (ns) for merging nearby weights before NPE estimation
 
+  // Noise-scaled NNLS stopping (optional). When both are > 0, the NNLS
+  // optimality tolerance becomes nnls_noise_nsigma * noise_sigma * max column
+  // norm of the region dictionary — the gradient level expected from pure
+  // noise — instead of the fixed nnls_tolerance. This stops the solver from
+  // fitting noise fluctuations with additional low-weight components.
+  double noise_sigma;        ///< Gaussian white-noise sigma of the waveform (mV); 0 disables
+  double nnls_noise_nsigma;  ///< Number of noise sigmas for the NNLS stopping level
+
+  // Position refinement. Reverse pursuit can only remove components, so a
+  // component misplaced by the initial NNLS solve (typically ~1 sample early,
+  // on the steep leading edge) is otherwise locked in. When enabled, each
+  // remaining component is tentatively moved to nearby free dictionary columns
+  // and the move is kept if it lowers the fit residual.
+  bool refine_positions;  ///< Enable post-pruning position refinement
+
   // NPE estimation parameters
   bool npe_estimate;                 ///< Whether to perform NPE estimation on resolved wave packets
   double npe_estimate_charge_width;  ///< Width of Gaussian single-PE charge distribution

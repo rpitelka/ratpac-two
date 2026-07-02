@@ -164,9 +164,24 @@
 // Dictionary matrix parameters
 "upsampling_factor": 10.0, // Upsampling resolution factor for dictionary
 
-// Algorithm parameters  
+// Algorithm parameters
 "max_iterations": 50, // Maximum number of rsNNLS iterations
-"nnls_tolerance": 1e-10, // NNLS convergence tolerance
+"nnls_tolerance": 1e-10, // NNLS convergence tolerance (fallback when noise_sigma = 0)
+
+// Noise-scaled NNLS stopping. When noise_sigma > 0, the NNLS solver stops once
+// the optimality gradient drops to nnls_noise_nsigma * noise_sigma * (max
+// dictionary column norm) — the level expected from pure noise — instead of
+// the fixed nnls_tolerance. This avoids fitting noise with extra low-weight
+// components and greatly reduces solver iterations. noise_sigma should match
+// the digitizer noise (DIGITIZER "noise_amplitude"), in mV.
+"noise_sigma": 0.40,
+"nnls_noise_nsigma": 3.0,
+
+// Post-pruning position refinement: tentatively move each remaining component
+// to nearby free dictionary columns and keep moves that lower the residual.
+// Corrects components the initial NNLS solve locked in ~1 sample early on the
+// pulse leading edge (the source of an early ghost-PE timing artifact).
+"refine_positions": 1,
 
 // Thresholding parameters
 "weight_threshold": 0.25, // Minimum weight for component significance

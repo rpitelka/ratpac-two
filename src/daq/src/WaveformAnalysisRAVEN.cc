@@ -10,6 +10,8 @@
 #include <RAT/WaveformAnalysisRAVEN.hh>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <numeric>
 
 #include "RAT/DS/DigitPMT.hh"
 #include "RAT/DS/WaveformAnalysisResult.hh"
@@ -61,6 +63,24 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
     // Weight merging configuration
     weight_merge_window = fDigit->GetD("weight_merge_window");  // Time window for merging nearby weights (ns)
 
+    // Optional parameters (absent from older tables): noise-scaled NNLS
+    // stopping level and post-pruning position refinement.
+    noise_sigma = 0.0;
+    nnls_noise_nsigma = 3.0;
+    refine_positions = false;
+    try {
+      noise_sigma = fDigit->GetD("noise_sigma");
+    } catch (DBNotFoundError) {
+    }
+    try {
+      nnls_noise_nsigma = fDigit->GetD("nnls_noise_nsigma");
+    } catch (DBNotFoundError) {
+    }
+    try {
+      refine_positions = fDigit->GetZ("refine_positions");
+    } catch (DBNotFoundError) {
+    }
+
     // Validate critical parameters
     if (upsample_factor <= 0) {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid upsampling factor.");
@@ -97,6 +117,10 @@ void WaveformAnalysisRAVEN::SetD(std::string param, double value) {
     npe_estimate_charge_width = value;
   } else if (param == "weight_merge_window") {
     weight_merge_window = value;
+  } else if (param == "noise_sigma") {
+    noise_sigma = value;
+  } else if (param == "nnls_noise_nsigma") {
+    nnls_noise_nsigma = value;
   } else {
     WaveformAnalyzerBase::SetD(param, value);
   }
@@ -117,6 +141,8 @@ void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
     npe_estimate = (value != 0);
   } else if (param == "npe_estimate_max_pes") {
     npe_estimate_max_pes = static_cast<size_t>(value);
+  } else if (param == "refine_positions") {
+    refine_positions = (value != 0);
   } else {
     throw Processor::ParamUnknown(param);
   }
@@ -231,10 +257,27 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
     RAT::Log::Die("WaveformAnalysisRAVEN: Dictionary region row dimension mismatch.");
   }
 
+  // NNLS stopping tolerance. The optimality test compares the gradient
+  // max_j A_j^T r against this value; on a pure-noise residual that gradient
+  // fluctuates at the level noise_sigma * ||A_j||, so stopping below it just
+  // fits noise with extra low-weight components (and costs many extra solver
+  // iterations). When noise_sigma is configured, stop at nnls_noise_nsigma
+  // noise sigmas; otherwise fall back to the fixed nnls_tolerance.
+  double tol = epsilon;
+  if (noise_sigma > 0.0 && nnls_noise_nsigma > 0.0) {
+    double max_col_norm2 = 0.0;
+    for (int j = 0; j < K; ++j) {
+      double norm2 = 0.0;
+      for (int i = 0; i < D; ++i) norm2 += W_region(i, j) * W_region(i, j);
+      max_col_norm2 = std::max(max_col_norm2, norm2);
+    }
+    tol = std::max(tol, nnls_noise_nsigma * noise_sigma * std::sqrt(max_col_norm2));
+  }
+
   // Initial NNLS solve
   TVectorD h_full(K);
   h_full.Zero();
-  h_full = Math::NNLS_LawsonHanson(W_region, voltVec, epsilon, 0, 0);
+  h_full = Math::NNLS_LawsonHanson(W_region, voltVec, tol, 0, 0);
 
   // Build initial active set
   std::vector<int> P;
@@ -278,12 +321,87 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
     TMatrixD W_P = subCols(W_region, P);
     TVectorD h_reduced(P.size());
     h_reduced.Zero();
-    h_reduced = Math::NNLS_LawsonHanson(W_P, voltVec, epsilon, 0, 0);
+    h_reduced = Math::NNLS_LawsonHanson(W_P, voltVec, tol, 0, 0);
 
     // Update full weight vector
     h_full.Zero();
     for (size_t k = 0; k < P.size(); ++k) {
       h_full(P[k]) = h_reduced(k);
+    }
+  }
+
+  // Position refinement. The reverse pursuit above can only remove components,
+  // so a component the initial solve misplaced (typically ~1 sample early, on
+  // the steep leading edge of a pulse) stays misplaced and shows up as an early
+  // ghost PE. For each remaining component, score nearby free columns with the
+  // others' weights held fixed (a cheap 1-D projection), and if a neighbor
+  // fits better, move the component there and re-solve; keep the move if the
+  // total residual decreases.
+  if (refine_positions && !P.empty()) {
+    const int max_shift = std::max(1, static_cast<int>(std::lround(upsample_factor)));  // +- 1 sample
+    auto residualOf = [&](const TVectorD& h) {
+      TVectorD r = voltVec;
+      for (int j = 0; j < K; ++j) {
+        if (h(j) == 0.0) continue;
+        for (int i = 0; i < D; ++i) r(i) -= W_region(i, j) * h(j);
+      }
+      return r;
+    };
+    TVectorD r_full = residualOf(h_full);
+    double cur_rss = r_full * r_full;
+    std::vector<char> occupied(K, 0);
+    for (int c : P) occupied[c] = 1;
+
+    for (int sweep = 0; sweep < 2; ++sweep) {
+      bool improved = false;
+      for (size_t idx = 0; idx < P.size(); ++idx) {
+        const int c = P[idx];
+        // Residual with this component removed, other weights fixed.
+        TVectorD r_wo = r_full;
+        for (int i = 0; i < D; ++i) r_wo(i) += W_region(i, c) * h_full(c);
+        // 1-D score of each nearby free column: rss after optimally (re)fitting
+        // a single nonnegative weight on that column.
+        int best_col = c;
+        double best_1d = std::numeric_limits<double>::max();
+        for (int dc = -max_shift; dc <= max_shift; ++dc) {
+          const int cp = c + dc;
+          if (cp < 0 || cp >= K) continue;
+          if (cp != c && occupied[cp]) continue;
+          double dot = 0.0, norm2 = 0.0;
+          for (int i = 0; i < D; ++i) {
+            dot += W_region(i, cp) * r_wo(i);
+            norm2 += W_region(i, cp) * W_region(i, cp);
+          }
+          const double gain = (dot > 0.0 && norm2 > 0.0) ? dot * dot / norm2 : 0.0;
+          const double rss_1d = (r_wo * r_wo) - gain;
+          if (rss_1d < best_1d - 1e-12) {
+            best_1d = rss_1d;
+            best_col = cp;
+          }
+        }
+        if (best_col == c) continue;
+
+        // Full re-solve with the component moved; accept only on improvement.
+        std::vector<int> P_trial = P;
+        P_trial[idx] = best_col;
+        TMatrixD W_P = subCols(W_region, P_trial);
+        TVectorD h_trial = Math::NNLS_LawsonHanson(W_P, voltVec, tol, 0, 0);
+        TVectorD h_new(K);
+        h_new.Zero();
+        for (size_t k = 0; k < P_trial.size(); ++k) h_new(P_trial[k]) = h_trial(static_cast<int>(k));
+        TVectorD r_new = residualOf(h_new);
+        const double new_rss = r_new * r_new;
+        if (new_rss < cur_rss - 1e-9) {
+          occupied[c] = 0;
+          occupied[best_col] = 1;
+          P[idx] = best_col;
+          h_full = h_new;
+          r_full = r_new;
+          cur_rss = new_rss;
+          improved = true;
+        }
+      }
+      if (!improved) break;
     }
   }
 
@@ -422,37 +540,39 @@ std::vector<std::pair<double, double>> WaveformAnalysisRAVEN::MergeNearbyWeights
     return time_weight_pairs;
   }
 
-  // Merge weights within the time window
+  // Dominant-atom merge: seed clusters at the largest remaining weight and
+  // absorb all unassigned weights within merge_window of the *seed* time. The
+  // previous scheme seeded clusters at the earliest weight, so a small
+  // leading-edge ghost component anchored the cluster and dragged the merged
+  // time early; anchoring at the dominant component folds such ghosts into the
+  // main pulse instead.
+  std::vector<size_t> order(time_weight_pairs.size());
+  std::iota(order.begin(), order.end(), size_t(0));
+  std::sort(order.begin(), order.end(),
+            [&](size_t a, size_t b) { return time_weight_pairs[a].second > time_weight_pairs[b].second; });
+
+  std::vector<char> assigned(time_weight_pairs.size(), 0);
   std::vector<std::pair<double, double>> merged_weights;
   merged_weights.reserve(time_weight_pairs.size());
 
-  size_t i = 0;
-  while (i < time_weight_pairs.size()) {
-    // Start a new cluster
-    double cluster_weight_sum = time_weight_pairs[i].second;
-    double cluster_time_weighted_sum = time_weight_pairs[i].first * time_weight_pairs[i].second;
-    size_t cluster_end = i + 1;
-
-    // Extend cluster to include all weights within merge_window of any cluster member
-    while (cluster_end < time_weight_pairs.size()) {
-      // Check if next weight is within merge_window of the cluster's weighted mean time
-      double cluster_mean_time = cluster_time_weighted_sum / cluster_weight_sum;
-      if (time_weight_pairs[cluster_end].first - cluster_mean_time <= merge_window) {
-        // Add to cluster
-        cluster_weight_sum += time_weight_pairs[cluster_end].second;
-        cluster_time_weighted_sum += time_weight_pairs[cluster_end].first * time_weight_pairs[cluster_end].second;
-        cluster_end++;
-      } else {
-        break;
+  for (size_t seed : order) {
+    if (assigned[seed]) continue;
+    const double seed_time = time_weight_pairs[seed].first;
+    double cluster_weight_sum = 0.0;
+    double cluster_time_weighted_sum = 0.0;
+    for (size_t j = 0; j < time_weight_pairs.size(); ++j) {
+      if (assigned[j]) continue;
+      if (std::abs(time_weight_pairs[j].first - seed_time) <= merge_window) {
+        assigned[j] = 1;
+        cluster_weight_sum += time_weight_pairs[j].second;
+        cluster_time_weighted_sum += time_weight_pairs[j].first * time_weight_pairs[j].second;
       }
     }
-
-    // Store merged weight with charge-weighted mean time
-    double merged_time = cluster_time_weighted_sum / cluster_weight_sum;
-    merged_weights.emplace_back(merged_time, cluster_weight_sum);
-
-    i = cluster_end;
+    merged_weights.emplace_back(cluster_time_weighted_sum / cluster_weight_sum, cluster_weight_sum);
   }
+
+  // Restore time ordering for downstream consumers.
+  std::sort(merged_weights.begin(), merged_weights.end());
 
   return merged_weights;
 }
