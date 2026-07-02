@@ -39,6 +39,7 @@
 #include <RAT/Digitizer.hh>
 #include <RAT/Processor.hh>
 #include <RAT/WaveformAnalyzerBase.hh>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -54,7 +55,9 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
 
   virtual ~WaveformAnalysisRAVEN(){};
 
-  void BuildDictionaryMatrix(int nsamples, double digitizer_period);
+  /// Build a dictionary of time-shifted templates into W_out. For the gaussian
+  /// template, `width` is the SER sigma to use (per-PMT-type selectable).
+  void BuildDictionaryMatrix(int nsamples, double digitizer_period, double width, TMatrixD &W_out);
 
   void Configure(const std::string &config_name) override;
 
@@ -77,13 +80,21 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   // Gaussian template parameters
   double gaussian_width;  ///< Gaussian 'sigma' parameter for SPE template
 
+  // Optional per-PMT-type gaussian widths. The true SER width differs between
+  // PMT models (e.g. Eos 8" r14688 ~1.6 ns vs 12" r11780 ~3.0 ns); a single
+  // template width mis-fits the other models and produces satellite
+  // components. PMT types listed here use the paired width; others fall back
+  // to gaussian_width.
+  std::vector<int> gaussian_width_types;      ///< PMT types with a dedicated template width
+  std::vector<double> gaussian_width_values;  ///< Template width (ns) per listed PMT type
+
   double vpe_charge;  ///< Nominal charge of single PE in pC
 
   // Algorithm configuration
-  TMatrixD fW;             ///< Dictionary matrix for NNLS (nsamples × dict_size)
-  double epsilon;          ///< NNLS convergence tolerance
-  size_t max_iterations;   ///< Maximum iterations for iterative thresholding
-  double upsample_factor;  ///< Dictionary upsampling factor for sub-sample resolution
+  std::map<int, TMatrixD> fWCache;  ///< Dictionary per template (key: width in ps; -1 = lognormal)
+  double epsilon;                   ///< NNLS convergence tolerance
+  size_t max_iterations;            ///< Maximum iterations for iterative thresholding
+  double upsample_factor;           ///< Dictionary upsampling factor for sub-sample resolution
 
   // Thresholding parameters
   double weight_threshold;     ///< Minimum weight threshold for component significance
@@ -110,7 +121,6 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   size_t npe_estimate_max_pes;       ///< Upper limit for NPE estimation
 
   // Dictionary management
-  bool dictionary_built;           ///< Flag to track if dictionary has been built
   int cached_nsamples;             ///< Cached number of samples for dictionary
   double cached_digitizer_period;  ///< Cached digitizer period for dictionary
 
@@ -125,7 +135,7 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
                                                         int region_padding);
 
   /// Process a single threshold crossing region with rsNNLS
-  void ProcessThresholdRegion(const std::vector<double> &voltWfm, int start_sample, int end_sample,
+  void ProcessThresholdRegion(const TMatrixD &fW, const std::vector<double> &voltWfm, int start_sample, int end_sample,
                               DS::WaveformAnalysisResult *fit_result, double gain_calibration);
 
   /// Extract photoelectrons from significant weights in the region

@@ -42,6 +42,18 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
       lognormal_shape = fDigit->GetD("lognormal_shape");  // LogNormal 'sigma' parameter
     } else if (template_type == 1) {                      // gaussian
       gaussian_width = fDigit->GetD("gaussian_width");    // Gaussian 'sigma' parameter
+      // Optional per-PMT-type template widths (paired arrays); unlisted PMT
+      // types fall back to gaussian_width.
+      gaussian_width_types.clear();
+      gaussian_width_values.clear();
+      try {
+        gaussian_width_types = fDigit->GetIArray("gaussian_width_pmt_types");
+        gaussian_width_values = fDigit->GetDArray("gaussian_width_pmt_widths");
+      } catch (DBNotFoundError) {
+      }
+      if (gaussian_width_types.size() != gaussian_width_values.size()) {
+        RAT::Log::Die("WaveformAnalysisRAVEN: gaussian_width_pmt_types/widths must have equal length.");
+      }
     } else {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid template_type " + std::to_string(template_type) +
                     ". Must be 0 (lognormal) or 1 (gaussian).");
@@ -86,8 +98,8 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid upsampling factor.");
     }
 
-    // Initialize dictionary flags
-    dictionary_built = false;
+    // Initialize dictionary cache
+    fWCache.clear();
     cached_nsamples = -1;            // Invalid initial value to force dictionary build on first use
     cached_digitizer_period = -1.0;  // Invalid initial value to force dictionary build on first use
 
@@ -99,14 +111,18 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
 void WaveformAnalysisRAVEN::SetD(std::string param, double value) {
   if (param == "lognormal_scale") {
     lognormal_scale = value;
+    fWCache.clear();
   } else if (param == "lognormal_shape") {
     lognormal_shape = value;
+    fWCache.clear();
   } else if (param == "gaussian_width") {
     gaussian_width = value;
   } else if (param == "vpe_charge") {
     vpe_charge = value;
+    fWCache.clear();
   } else if (param == "upsampling_factor") {
     upsample_factor = value;
+    fWCache.clear();
   } else if (param == "weight_threshold") {
     weight_threshold = value;
   } else if (param == "voltage_threshold") {
@@ -137,6 +153,7 @@ void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid raven_template_type " + std::to_string(value) +
                     ". Must be 0 (lognormal) or 1 (gaussian).");
     }
+    fWCache.clear();
   } else if (param == "npe_estimate") {
     npe_estimate = (value != 0);
   } else if (param == "npe_estimate_max_pes") {
@@ -148,20 +165,18 @@ void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
   }
 }
 
-void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer_period) {
-  debug << "WaveformAnalysisRAVEN: Building dictionary matrix" << newline;
-  debug << "WaveformAnalysisRAVEN: Dictionary state - built: " << dictionary_built
-        << ", cached_nsamples: " << cached_nsamples << ", cached_period: " << cached_digitizer_period << newline;
-  debug << "WaveformAnalysisRAVEN: Current params - nsamples: " << nsamples << ", period: " << digitizer_period
-        << newline;
+void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer_period, double width,
+                                                  TMatrixD& W_out) {
+  debug << "WaveformAnalysisRAVEN: Building dictionary matrix - nsamples: " << nsamples
+        << ", period: " << digitizer_period << newline;
   debug << "WaveformAnalysisRAVEN: Using raven_template_type: " << template_type << " ("
-        << (template_type == 0 ? "lognormal" : "gaussian") << ")" << newline;
+        << (template_type == 0 ? "lognormal" : "gaussian") << "), width " << width << newline;
   debug << "WaveformAnalysisRAVEN: Dictionary size: " << nsamples << " x "
         << static_cast<int>(nsamples * upsample_factor) << newline;
 
   const int dict_size = static_cast<int>(nsamples * upsample_factor);
-  fW.ResizeTo(nsamples, dict_size);
-  fW.Zero();
+  W_out.ResizeTo(nsamples, dict_size);
+  W_out.Zero();
 
   const double mag_factor = vpe_charge * fTermOhms;
 
@@ -179,29 +194,43 @@ void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer
           template_val = mag_factor * TMath::LogNormal(sample_time, lognormal_shape, lognormal_shift, lognormal_scale);
         }
       } else if (template_type == 1) {  // gaussian
-        template_val = mag_factor * TMath::Gaus(sample_time, delay, gaussian_width, kTRUE);
+        template_val = mag_factor * TMath::Gaus(sample_time, delay, width, kTRUE);
       }
 
-      fW(row, col) = -template_val;
+      W_out(row, col) = -template_val;
     }
   }
 }
 
 void WaveformAnalysisRAVEN::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t>& digitWfm) {
-  // Build dictionary on first call or when digitizer parameters change
+  // Invalidate the dictionary cache when digitizer parameters change
   const double period_tolerance = 1e-9;  // 1 ps tolerance for digitizer period comparison
-  if (!dictionary_built || cached_nsamples != static_cast<int>(digitWfm.size()) ||
+  if (cached_nsamples != static_cast<int>(digitWfm.size()) ||
       std::abs(cached_digitizer_period - fTimeStep) > period_tolerance) {
-    // Use current digitizer information from the waveform and base class
-    int nsamples = static_cast<int>(digitWfm.size());
-    double digitizer_period = fTimeStep;
-
-    BuildDictionaryMatrix(nsamples, digitizer_period);
-
-    cached_nsamples = nsamples;
-    cached_digitizer_period = digitizer_period;
-    dictionary_built = true;
+    fWCache.clear();
+    cached_nsamples = static_cast<int>(digitWfm.size());
+    cached_digitizer_period = fTimeStep;
   }
+
+  // Pick the template width for this PMT's type (gaussian template only) and
+  // fetch/build the matching dictionary.
+  double width = gaussian_width;
+  if (template_type == 1 && !gaussian_width_types.empty()) {
+    const int pmt_type = DS::RunStore::GetCurrentRun()->GetPMTInfo()->GetType(digitpmt->GetID());
+    for (size_t i = 0; i < gaussian_width_types.size(); ++i) {
+      if (gaussian_width_types[i] == pmt_type) {
+        width = gaussian_width_values[i];
+        break;
+      }
+    }
+  }
+  const int cache_key = (template_type == 0) ? -1 : static_cast<int>(std::lround(width * 1000.0));
+  auto cache_it = fWCache.find(cache_key);
+  if (cache_it == fWCache.end()) {
+    cache_it = fWCache.emplace(cache_key, TMatrixD()).first;
+    BuildDictionaryMatrix(cached_nsamples, cached_digitizer_period, width, cache_it->second);
+  }
+  const TMatrixD& fW = cache_it->second;
 
   double pedestal = digitpmt->GetPedestal();
   if (pedestal == -9999) {
@@ -237,14 +266,14 @@ void WaveformAnalysisRAVEN::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector
       int end_sample = region.second;
 
       // Perform rsNNLS on this region
-      ProcessThresholdRegion(voltWfm, start_sample, end_sample, fit_result, gain_calibration);
+      ProcessThresholdRegion(fW, voltWfm, start_sample, end_sample, fit_result, gain_calibration);
     }
   } else {
     int start_sample = 0;
     int end_sample = static_cast<int>(voltWfm.size()) - 1;
 
     // Perform rsNNLS on the entire waveform
-    ProcessThresholdRegion(voltWfm, start_sample, end_sample, fit_result, gain_calibration);
+    ProcessThresholdRegion(fW, voltWfm, start_sample, end_sample, fit_result, gain_calibration);
   }
 }
 
@@ -471,7 +500,8 @@ std::vector<std::pair<int, int>> WaveformAnalysisRAVEN::FindThresholdRegions(con
   return regions;
 }
 
-void WaveformAnalysisRAVEN::ProcessThresholdRegion(const std::vector<double>& voltWfm, int start_sample, int end_sample,
+void WaveformAnalysisRAVEN::ProcessThresholdRegion(const TMatrixD& fW, const std::vector<double>& voltWfm,
+                                                   int start_sample, int end_sample,
                                                    DS::WaveformAnalysisResult* fit_result, double gain_calibration) {
   const int region_length = end_sample - start_sample + 1;
 
