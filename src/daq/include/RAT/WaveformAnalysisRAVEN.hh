@@ -40,6 +40,7 @@
 #include <RAT/Processor.hh>
 #include <RAT/WaveformAnalyzerBase.hh>
 #include <map>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -92,9 +93,18 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
 
   // Algorithm configuration
   std::map<int, TMatrixD> fWCache;  ///< Dictionary per template (key: width in ps; -1 = lognormal)
-  double epsilon;                   ///< NNLS convergence tolerance
-  size_t max_iterations;            ///< Maximum iterations for iterative thresholding
-  double upsample_factor;           ///< Dictionary upsampling factor for sub-sample resolution
+
+  /// Cached max squared dictionary-column norm of a region submatrix, used for
+  /// the noise-scaled NNLS stopping level. A region submatrix is a pure
+  /// function of (template, region rows, region columns) — the templates are
+  /// time-shifted copies, so the submatrix content does not depend on where in
+  /// the waveform the region starts — which makes this memo exact rather than
+  /// an approximation. Key: (template key, region rows, region columns).
+  std::map<std::tuple<int, int, int>, double> fMaxColNorm2Cache;
+
+  double epsilon;          ///< NNLS convergence tolerance
+  size_t max_iterations;   ///< Maximum iterations for iterative thresholding
+  double upsample_factor;  ///< Dictionary upsampling factor for sub-sample resolution
 
   // Thresholding parameters
   double weight_threshold;     ///< Minimum weight threshold for component significance
@@ -126,8 +136,16 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
 
   void DoAnalysis(DS::DigitPMT *digitpmt, const std::vector<UShort_t> &digitWfm) override;
 
-  /// Perform reverse sparse NNLS with iterative thresholding on a region submatrix
-  TVectorD Thresholded_rsNNLS(const TMatrixD &W_region, const TVectorD &voltVec, const double threshold,
+  /// Cache key identifying a template: quantized width in ps, or -1 for lognormal.
+  int TemplateKey(double width) const;
+
+  /// Drop every cached dictionary and derived quantity. Must be called whenever
+  /// a parameter that changes the template shape or scale is modified.
+  void ClearDictionaryCache();
+
+  /// Perform reverse sparse NNLS with iterative thresholding on a region
+  /// submatrix. `width` identifies the template in use, for cache lookups.
+  TVectorD Thresholded_rsNNLS(const TMatrixD &W_region, const TVectorD &voltVec, const double threshold, double width,
                               double &chi2ndf_out, int &iterations_out);
 
   /// Find threshold crossing regions in waveform for efficient processing
@@ -136,12 +154,14 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
 
   /// Process a single threshold crossing region with rsNNLS
   void ProcessThresholdRegion(const TMatrixD &fW, const std::vector<double> &voltWfm, int start_sample, int end_sample,
-                              DS::WaveformAnalysisResult *fit_result, double gain_calibration);
+                              DS::WaveformAnalysisResult *fit_result, double gain_calibration, double width);
 
-  /// Extract photoelectrons from significant weights in the region
+  /// Extract photoelectrons from significant weights in the region. `width` is
+  /// the template width actually used for this PMT, which sets the tolerance of
+  /// the PE-time sanity check.
   void ExtractPhotoelectrons(const TVectorD &region_weights, int dict_start, int dict_cols, int start_sample,
                              int end_sample, double chi2ndf, int iterations_ran, DS::WaveformAnalysisResult *fit_result,
-                             double gain_calibration);
+                             double gain_calibration, double width);
 
   /// Merge nearby weights within a time window to prevent PE overcounting
   /// Returns vector of (time, merged_weight) pairs

@@ -187,7 +187,7 @@
 // to nearby free dictionary columns and keep moves that lower the residual.
 // Corrects components the initial NNLS solve locked in ~1 sample early on the
 // pulse leading edge (the source of an early ghost-PE timing artifact).
-"refine_positions": 1,
+"refine_positions": true,
 
 // Thresholding parameters
 "weight_threshold": 0.25, // Minimum weight for component significance
