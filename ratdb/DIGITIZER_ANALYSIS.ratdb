@@ -154,8 +154,13 @@
 "lognormal_scale": 10.5, // "m" parameter in Lognormal distribution
 "lognormal_shape": 0.15, // "sigma" parameter in Lognormal distribution
 
-// Gaussian template parameters (used when raven_template_type = 1)  
+// Gaussian template parameters (used when raven_template_type = 1)
 "gaussian_width": 1.5, // Gaussian sigma parameter for SPE template
+// Optional per-PMT-type template widths (paired arrays). PMT types listed in
+// gaussian_width_pmt_types use the corresponding width from
+// gaussian_width_pmt_widths; unlisted types fall back to gaussian_width.
+// "gaussian_width_pmt_types": [2, 3],
+// "gaussian_width_pmt_widths": [3.0, 2.3],
 
 // Nominal charge of a single PE in pC. Used to determine the correct 
 // normalization for a SPE waveform and to convert deconvolved weights to charge.
@@ -164,9 +169,13 @@
 // Dictionary matrix parameters
 "upsampling_factor": 10.0, // Upsampling resolution factor for dictionary
 
-// Algorithm parameters  
+// Algorithm parameters
 "max_iterations": 50, // Maximum number of rsNNLS iterations
 "nnls_tolerance": 1e-10, // NNLS convergence tolerance
+
+// Post-pruning time refinement: tentatively move each remaining component
+// to nearby free time offsets and keep moves that lower the residual.
+"refine_times": true,
 
 // Thresholding parameters
 "weight_threshold": 0.25, // Minimum weight for component significance

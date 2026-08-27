@@ -11,6 +11,7 @@
 ///     12 Nov 2025: Added to ratpac-two
 ///     15 Jan 2026: Added region-based processing and NPE estimation features
 ///     09 Feb 2026: Renamed to RAVEN
+///     26 Aug 2026: Per-PMT-type template widths and PE time refinement
 ///
 /// \details
 /// RAVEN (Reverse Analysis of Voltage Events with Nonegativity) is a waveform analysis algorithm
@@ -22,7 +23,10 @@
 /// 2. Identifies threshold crossing regions in the waveform for localized processing
 /// 3. For each region, extracts relevant dictionary submatrix and applies NNLS fitting
 /// 4. Uses iterative thresholding to remove low-weight components and redistribute weights
-/// 5. Extracts PE times and charges from remaining significant weights
+/// 5. Optionally refines component times against neighboring dictionary columns
+/// 6. Extracts PE times and charges from remaining significant weights
+///
+/// A per-PMT-type template width may be supplied where PMT models differ.
 ///
 /// Template types supported:
 /// - Lognormal
@@ -39,6 +43,7 @@
 #include <RAT/Digitizer.hh>
 #include <RAT/Processor.hh>
 #include <RAT/WaveformAnalyzerBase.hh>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -54,7 +59,9 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
 
   virtual ~WaveformAnalysisRAVEN(){};
 
-  void BuildDictionaryMatrix(int nsamples, double digitizer_period);
+  /// Build a dictionary of time-shifted templates into W_out. For the gaussian
+  /// template, `width` is the SER sigma to use (per-PMT-type selectable).
+  void BuildDictionaryMatrix(int nsamples, double digitizer_period, double width, TMatrixD &W_out);
 
   void Configure(const std::string &config_name) override;
 
@@ -77,10 +84,16 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   // Gaussian template parameters
   double gaussian_width;  ///< Gaussian 'sigma' parameter for SPE template
 
+  // Optional per-PMT-type widths. One template width mis-fits detectors mixing
+  // PMT models with different SER widths, producing satellite components.
+  std::vector<int> gaussian_width_types;      ///< PMT types with a dedicated template width
+  std::vector<double> gaussian_width_values;  ///< Template width (ns) per listed PMT type
+
   double vpe_charge;  ///< Nominal charge of single PE in pC
 
   // Algorithm configuration
-  TMatrixD fW;             ///< Dictionary matrix for NNLS (nsamples × dict_size)
+  std::map<int, TMatrixD> fWCache;  ///< Dictionary per template (key: width in ps; -1 = lognormal)
+
   double epsilon;          ///< NNLS convergence tolerance
   size_t max_iterations;   ///< Maximum iterations for iterative thresholding
   double upsample_factor;  ///< Dictionary upsampling factor for sub-sample resolution
@@ -89,17 +102,25 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   double weight_threshold;     ///< Minimum weight threshold for component significance
   double weight_merge_window;  ///< Time window (ns) for merging nearby weights before NPE estimation
 
+  bool refine_times;  ///< Move components to better-fitting neighboring times
+
   // NPE estimation parameters
   bool npe_estimate;                 ///< Whether to perform NPE estimation on resolved wave packets
   double npe_estimate_charge_width;  ///< Width of Gaussian single-PE charge distribution
   size_t npe_estimate_max_pes;       ///< Upper limit for NPE estimation
 
   // Dictionary management
-  bool dictionary_built;           ///< Flag to track if dictionary has been built
   int cached_nsamples;             ///< Cached number of samples for dictionary
   double cached_digitizer_period;  ///< Cached digitizer period for dictionary
 
   void DoAnalysis(DS::DigitPMT *digitpmt, const std::vector<UShort_t> &digitWfm) override;
+
+  /// Cache key identifying a template: quantized width in ps, or -1 for lognormal.
+  int TemplateKey(double width) const;
+
+  /// Drop every cached dictionary. Must be called whenever a parameter that
+  /// changes the template shape or scale is modified.
+  void ClearDictionaryCache();
 
   /// Perform reverse sparse NNLS with iterative thresholding on a region submatrix
   TVectorD Thresholded_rsNNLS(const TMatrixD &W_region, const TVectorD &voltVec, const double threshold,
@@ -110,13 +131,13 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
                                                         int region_padding);
 
   /// Process a single threshold crossing region with rsNNLS
-  void ProcessThresholdRegion(const std::vector<double> &voltWfm, int start_sample, int end_sample,
-                              DS::WaveformAnalysisResult *fit_result, double gain_calibration);
+  void ProcessThresholdRegion(const TMatrixD &fW, const std::vector<double> &voltWfm, int start_sample, int end_sample,
+                              DS::WaveformAnalysisResult *fit_result, double gain_calibration, double width);
 
   /// Extract photoelectrons from significant weights in the region
   void ExtractPhotoelectrons(const TVectorD &region_weights, int dict_start, int dict_cols, int start_sample,
                              int end_sample, double chi2ndf, int iterations_ran, DS::WaveformAnalysisResult *fit_result,
-                             double gain_calibration);
+                             double gain_calibration, double width);
 
   /// Merge nearby weights within a time window to prevent PE overcounting
   /// Returns vector of (time, merged_weight) pairs

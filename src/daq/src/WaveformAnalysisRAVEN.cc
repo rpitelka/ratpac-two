@@ -10,6 +10,8 @@
 #include <RAT/WaveformAnalysisRAVEN.hh>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <numeric>
 
 #include "RAT/DS/DigitPMT.hh"
 #include "RAT/DS/WaveformAnalysisResult.hh"
@@ -40,6 +42,24 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
       lognormal_shape = fDigit->GetD("lognormal_shape");  // LogNormal 'sigma' parameter
     } else if (template_type == 1) {                      // gaussian
       gaussian_width = fDigit->GetD("gaussian_width");    // Gaussian 'sigma' parameter
+      // Optional per-PMT-type widths; unlisted types fall back to gaussian_width.
+      gaussian_width_types.clear();
+      gaussian_width_values.clear();
+      try {
+        gaussian_width_types = fDigit->GetIArray("gaussian_width_pmt_types");
+      } catch (DBWrongTypeError&) {
+        RAT::Log::Die("WaveformAnalysisRAVEN: gaussian_width_pmt_types must be an array of integers.");
+      } catch (DBNotFoundError&) {
+      }
+      try {
+        gaussian_width_values = fDigit->GetDArray("gaussian_width_pmt_widths");
+      } catch (DBWrongTypeError&) {
+        RAT::Log::Die("WaveformAnalysisRAVEN: gaussian_width_pmt_widths must be an array of numbers.");
+      } catch (DBNotFoundError&) {
+      }
+      if (gaussian_width_types.size() != gaussian_width_values.size()) {
+        RAT::Log::Die("WaveformAnalysisRAVEN: gaussian_width_pmt_types/widths must have equal length.");
+      }
     } else {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid template_type " + std::to_string(template_type) +
                     ". Must be 0 (lognormal) or 1 (gaussian).");
@@ -61,13 +81,22 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
     // Weight merging configuration
     weight_merge_window = fDigit->GetD("weight_merge_window");  // Time window for merging nearby weights (ns)
 
+    // Optional time refinement
+    refine_times = false;
+    try {
+      refine_times = fDigit->GetZ("refine_times");
+    } catch (DBWrongTypeError&) {
+      RAT::Log::Die("WaveformAnalysisRAVEN: refine_times must be a boolean (true/false), not an integer.");
+    } catch (DBNotFoundError&) {
+    }
+
     // Validate critical parameters
     if (upsample_factor <= 0) {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid upsampling factor.");
     }
 
-    // Initialize dictionary flags
-    dictionary_built = false;
+    // Initialize dictionary cache
+    ClearDictionaryCache();
     cached_nsamples = -1;            // Invalid initial value to force dictionary build on first use
     cached_digitizer_period = -1.0;  // Invalid initial value to force dictionary build on first use
 
@@ -76,17 +105,27 @@ void WaveformAnalysisRAVEN::Configure(const std::string& config_name) {
   }
 }
 
+int WaveformAnalysisRAVEN::TemplateKey(double width) const {
+  return (template_type == 0) ? -1 : static_cast<int>(std::lround(width * 1000.0));
+}
+
+void WaveformAnalysisRAVEN::ClearDictionaryCache() { fWCache.clear(); }
+
 void WaveformAnalysisRAVEN::SetD(std::string param, double value) {
   if (param == "lognormal_scale") {
     lognormal_scale = value;
+    ClearDictionaryCache();
   } else if (param == "lognormal_shape") {
     lognormal_shape = value;
+    ClearDictionaryCache();
   } else if (param == "gaussian_width") {
     gaussian_width = value;
   } else if (param == "vpe_charge") {
     vpe_charge = value;
+    ClearDictionaryCache();
   } else if (param == "upsampling_factor") {
     upsample_factor = value;
+    ClearDictionaryCache();
   } else if (param == "weight_threshold") {
     weight_threshold = value;
   } else if (param == "voltage_threshold") {
@@ -113,29 +152,30 @@ void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
       RAT::Log::Die("WaveformAnalysisRAVEN: Invalid raven_template_type " + std::to_string(value) +
                     ". Must be 0 (lognormal) or 1 (gaussian).");
     }
+    ClearDictionaryCache();
   } else if (param == "npe_estimate") {
     npe_estimate = (value != 0);
   } else if (param == "npe_estimate_max_pes") {
     npe_estimate_max_pes = static_cast<size_t>(value);
+  } else if (param == "refine_times") {
+    refine_times = (value != 0);
   } else {
     throw Processor::ParamUnknown(param);
   }
 }
 
-void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer_period) {
-  debug << "WaveformAnalysisRAVEN: Building dictionary matrix" << newline;
-  debug << "WaveformAnalysisRAVEN: Dictionary state - built: " << dictionary_built
-        << ", cached_nsamples: " << cached_nsamples << ", cached_period: " << cached_digitizer_period << newline;
-  debug << "WaveformAnalysisRAVEN: Current params - nsamples: " << nsamples << ", period: " << digitizer_period
-        << newline;
+void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer_period, double width,
+                                                  TMatrixD& W_out) {
+  debug << "WaveformAnalysisRAVEN: Building dictionary matrix - nsamples: " << nsamples
+        << ", period: " << digitizer_period << newline;
   debug << "WaveformAnalysisRAVEN: Using raven_template_type: " << template_type << " ("
-        << (template_type == 0 ? "lognormal" : "gaussian") << ")" << newline;
+        << (template_type == 0 ? "lognormal" : "gaussian") << "), width " << width << newline;
   debug << "WaveformAnalysisRAVEN: Dictionary size: " << nsamples << " x "
         << static_cast<int>(nsamples * upsample_factor) << newline;
 
   const int dict_size = static_cast<int>(nsamples * upsample_factor);
-  fW.ResizeTo(nsamples, dict_size);
-  fW.Zero();
+  W_out.ResizeTo(nsamples, dict_size);
+  W_out.Zero();
 
   const double mag_factor = vpe_charge * fTermOhms;
 
@@ -153,29 +193,45 @@ void WaveformAnalysisRAVEN::BuildDictionaryMatrix(int nsamples, double digitizer
           template_val = mag_factor * TMath::LogNormal(sample_time, lognormal_shape, lognormal_shift, lognormal_scale);
         }
       } else if (template_type == 1) {  // gaussian
-        template_val = mag_factor * TMath::Gaus(sample_time, delay, gaussian_width, kTRUE);
+        template_val = mag_factor * TMath::Gaus(sample_time, delay, width, kTRUE);
       }
 
-      fW(row, col) = -template_val;
+      W_out(row, col) = -template_val;
     }
   }
 }
 
 void WaveformAnalysisRAVEN::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t>& digitWfm) {
-  // Build dictionary on first call or when digitizer parameters change
+  // Invalidate the dictionary cache when digitizer parameters change
   const double period_tolerance = 1e-9;  // 1 ps tolerance for digitizer period comparison
-  if (!dictionary_built || cached_nsamples != static_cast<int>(digitWfm.size()) ||
+  if (cached_nsamples != static_cast<int>(digitWfm.size()) ||
       std::abs(cached_digitizer_period - fTimeStep) > period_tolerance) {
-    // Use current digitizer information from the waveform and base class
-    int nsamples = static_cast<int>(digitWfm.size());
-    double digitizer_period = fTimeStep;
-
-    BuildDictionaryMatrix(nsamples, digitizer_period);
-
-    cached_nsamples = nsamples;
-    cached_digitizer_period = digitizer_period;
-    dictionary_built = true;
+    ClearDictionaryCache();
+    cached_nsamples = static_cast<int>(digitWfm.size());
+    cached_digitizer_period = fTimeStep;
   }
+
+  // Template width for this PMT's type; only used for gaussian templates
+  double width = 0.0;
+  if (template_type == 1) {
+    width = gaussian_width;
+    if (!gaussian_width_types.empty()) {
+      const int pmt_type = DS::RunStore::GetCurrentRun()->GetPMTInfo()->GetType(digitpmt->GetID());
+      for (size_t i = 0; i < gaussian_width_types.size(); ++i) {
+        if (gaussian_width_types[i] == pmt_type) {
+          width = gaussian_width_values[i];
+          break;
+        }
+      }
+    }
+  }
+  const int cache_key = TemplateKey(width);
+  auto cache_it = fWCache.find(cache_key);
+  if (cache_it == fWCache.end()) {
+    cache_it = fWCache.emplace(cache_key, TMatrixD()).first;
+    BuildDictionaryMatrix(cached_nsamples, cached_digitizer_period, width, cache_it->second);
+  }
+  const TMatrixD& fW = cache_it->second;
 
   double pedestal = digitpmt->GetPedestal();
   if (pedestal == -9999) {
@@ -211,14 +267,14 @@ void WaveformAnalysisRAVEN::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector
       int end_sample = region.second;
 
       // Perform rsNNLS on this region
-      ProcessThresholdRegion(voltWfm, start_sample, end_sample, fit_result, gain_calibration);
+      ProcessThresholdRegion(fW, voltWfm, start_sample, end_sample, fit_result, gain_calibration, width);
     }
   } else {
     int start_sample = 0;
     int end_sample = static_cast<int>(voltWfm.size()) - 1;
 
     // Perform rsNNLS on the entire waveform
-    ProcessThresholdRegion(voltWfm, start_sample, end_sample, fit_result, gain_calibration);
+    ProcessThresholdRegion(fW, voltWfm, start_sample, end_sample, fit_result, gain_calibration, width);
   }
 }
 
@@ -243,6 +299,31 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
     if (h_full(j) > 0.0) P.push_back(j);
   }
 
+  // A threshold-crossing region exists because the waveform crossed threshold, so
+  // it must yield a PE. The solver can still return nothing when nnls_tolerance is
+  // set above the pulse's own gradient, so seed the best-correlated column with the
+  // weight NNLS would give it alone: max(0, A_j.v / ||A_j||^2).
+  if (process_threshold_crossing && P.empty()) {
+    int seed_col = -1;
+    double seed_dot = 0.0;
+    for (int j = 0; j < K; ++j) {
+      double dot = 0.0;
+      for (int i = 0; i < D; ++i) dot += W_region(i, j) * voltVec(i);
+      if (dot > seed_dot) {
+        seed_dot = dot;
+        seed_col = j;
+      }
+    }
+    if (seed_col >= 0) {
+      double norm2 = 0.0;
+      for (int i = 0; i < D; ++i) norm2 += W_region(i, seed_col) * W_region(i, seed_col);
+      if (norm2 > 0.0) {
+        h_full(seed_col) = seed_dot / norm2;
+        P.push_back(seed_col);
+      }
+    }
+  }
+
   // Helper lambda to extract dictionary submatrix for active components
   auto subCols = [](const TMatrixD& W, const std::vector<int>& cols) {
     TMatrixD S(W.GetNrows(), cols.size());
@@ -253,38 +334,122 @@ TVectorD WaveformAnalysisRAVEN::Thresholded_rsNNLS(const TMatrixD& W_region, con
     return S;
   };
 
-  // Iterative thresholding
   int local_iterations_ran = 0;
 
-  for (size_t iter = 0; iter < max_iterations && !P.empty(); ++iter) {
-    local_iterations_ran = static_cast<int>(iter + 1);
+  auto pruneBelowThreshold = [&]() {
+    while (local_iterations_ran < static_cast<int>(max_iterations) && !P.empty()) {
+      local_iterations_ran++;
 
-    // Find component with minimum weight
-    std::vector<int>::iterator minIt =
-        std::min_element(P.begin(), P.end(), [&h_full](int a, int b) { return h_full(a) < h_full(b); });
-    size_t minPos = std::distance(P.begin(), minIt);
-    double minVal = h_full(*minIt);
+      std::vector<int>::iterator minIt =
+          std::min_element(P.begin(), P.end(), [&h_full](int a, int b) { return h_full(a) < h_full(b); });
+      size_t minPos = std::distance(P.begin(), minIt);
+      double minVal = h_full(*minIt);
 
-    if (minVal >= threshold) break;
+      if (minVal >= threshold) break;
 
-    // Never prune the last remaining component — always fit at least one PE per threshold crossing
-    if (P.size() == 1) break;
+      // Never prune the last remaining component: always fit at least one PE per threshold crossing
+      if (P.size() == 1) break;
 
-    // Remove component with smallest weight
-    h_full(P[minPos]) = 0.0;
-    P.erase(P.begin() + minPos);
+      h_full(P[minPos]) = 0.0;
+      P.erase(P.begin() + minPos);
 
-    // Re-solve on reduced active set
-    TMatrixD W_P = subCols(W_region, P);
-    TVectorD h_reduced(P.size());
-    h_reduced.Zero();
-    h_reduced = Math::NNLS_LawsonHanson(W_P, voltVec, epsilon, 0, 0);
+      TMatrixD W_P = subCols(W_region, P);
+      TVectorD h_reduced(P.size());
+      h_reduced.Zero();
+      h_reduced = Math::NNLS_LawsonHanson(W_P, voltVec, epsilon, 0, 0);
 
-    // Update full weight vector
-    h_full.Zero();
-    for (size_t k = 0; k < P.size(); ++k) {
-      h_full(P[k]) = h_reduced(k);
+      h_full.Zero();
+      for (size_t k = 0; k < P.size(); ++k) {
+        h_full(P[k]) = h_reduced(k);
+      }
     }
+  };
+
+  pruneBelowThreshold();
+
+  // Time refinement. Reverse pursuit only removes components, so a component
+  // the initial solve misplaced (typically ~1 sample early, on a steep leading
+  // edge) would otherwise stay misplaced as an early ghost PE.
+  if (refine_times && !P.empty()) {
+    const int max_shift = std::max(1, static_cast<int>(std::lround(upsample_factor)));  // +- 1 sample
+    auto residualOf = [&](const TVectorD& h) {
+      TVectorD r = voltVec;
+      for (int j = 0; j < K; ++j) {
+        if (h(j) == 0.0) continue;
+        for (int i = 0; i < D; ++i) r(i) -= W_region(i, j) * h(j);
+      }
+      return r;
+    };
+    TVectorD r_full = residualOf(h_full);
+    double cur_rss = r_full * r_full;
+    std::vector<char> occupied(K, 0);
+    for (int c : P) occupied[c] = 1;
+
+    // Column norms are fixed across candidates and sweeps, so compute each once.
+    std::vector<double> col_norm2(K, -1.0);
+    auto colNorm2 = [&](int col) {
+      if (col_norm2[col] < 0.0) {
+        double n2 = 0.0;
+        for (int i = 0; i < D; ++i) n2 += W_region(i, col) * W_region(i, col);
+        col_norm2[col] = n2;
+      }
+      return col_norm2[col];
+    };
+
+    for (int sweep = 0; sweep < 2; ++sweep) {
+      bool improved = false;
+      for (size_t idx = 0; idx < P.size(); ++idx) {
+        const int c = P[idx];
+        // Residual with this component removed, other weights fixed.
+        TVectorD r_wo = r_full;
+        for (int i = 0; i < D; ++i) r_wo(i) += W_region(i, c) * h_full(c);
+        const double rss_wo = r_wo * r_wo;  // loop-invariant in dc
+        // Score each nearby free column by the rss left after refitting one weight on it.
+        int best_col = c;
+        double best_1d = std::numeric_limits<double>::max();
+        for (int dc = -max_shift; dc <= max_shift; ++dc) {
+          const int cp = c + dc;
+          if (cp < 0 || cp >= K) continue;
+          if (cp != c && occupied[cp]) continue;
+          double dot = 0.0;
+          for (int i = 0; i < D; ++i) dot += W_region(i, cp) * r_wo(i);
+          const double norm2 = colNorm2(cp);
+          const double gain = (dot > 0.0 && norm2 > 0.0) ? dot * dot / norm2 : 0.0;
+          const double rss_1d = rss_wo - gain;
+          if (rss_1d < best_1d - 1e-12) {
+            best_1d = rss_1d;
+            best_col = cp;
+          }
+        }
+        if (best_col == c) continue;
+
+        // Full re-solve with the component moved; accept only on improvement.
+        std::vector<int> P_trial = P;
+        P_trial[idx] = best_col;
+        TMatrixD W_P = subCols(W_region, P_trial);
+        TVectorD h_trial = Math::NNLS_LawsonHanson(W_P, voltVec, epsilon, 0, 0);
+        TVectorD h_new(K);
+        h_new.Zero();
+        for (size_t k = 0; k < P_trial.size(); ++k) h_new(P_trial[k]) = h_trial(static_cast<int>(k));
+        TVectorD r_new = residualOf(h_new);
+        const double new_rss = r_new * r_new;
+        // Relative test: an absolute one would mean different things per region size.
+        if (new_rss < cur_rss * (1.0 - 1e-9)) {
+          occupied[c] = 0;
+          occupied[best_col] = 1;
+          P[idx] = best_col;
+          h_full = h_new;
+          r_full = r_new;
+          cur_rss = new_rss;
+          improved = true;
+        }
+      }
+      if (!improved) break;
+    }
+
+    // Re-solving on a moved support can drop a survivor back below `threshold`,
+    // so re-apply the cut rather than leak sub-threshold components.
+    pruneBelowThreshold();
   }
 
   // Ensure numerical stability
@@ -353,8 +518,10 @@ std::vector<std::pair<int, int>> WaveformAnalysisRAVEN::FindThresholdRegions(con
   return regions;
 }
 
-void WaveformAnalysisRAVEN::ProcessThresholdRegion(const std::vector<double>& voltWfm, int start_sample, int end_sample,
-                                                   DS::WaveformAnalysisResult* fit_result, double gain_calibration) {
+void WaveformAnalysisRAVEN::ProcessThresholdRegion(const TMatrixD& fW, const std::vector<double>& voltWfm,
+                                                   int start_sample, int end_sample,
+                                                   DS::WaveformAnalysisResult* fit_result, double gain_calibration,
+                                                   double width) {
   const int region_length = end_sample - start_sample + 1;
 
   // Use iterators to avoid copying waveform segment
@@ -402,7 +569,7 @@ void WaveformAnalysisRAVEN::ProcessThresholdRegion(const std::vector<double>& vo
 
   // Extract PEs from significant weights
   ExtractPhotoelectrons(region_weights, dict_start, dict_cols, start_sample, end_sample, chi2ndf, iterations_ran,
-                        fit_result, gain_calibration);
+                        fit_result, gain_calibration, width);
 }
 
 std::vector<std::pair<double, double>> WaveformAnalysisRAVEN::MergeNearbyWeights(const TVectorD& region_weights,
@@ -422,50 +589,49 @@ std::vector<std::pair<double, double>> WaveformAnalysisRAVEN::MergeNearbyWeights
     return time_weight_pairs;
   }
 
-  // Merge weights within the time window
+  // Dominant-atom merge: seed at the largest remaining weight. The emitted time is
+  // the charge-weighted cluster mean either way, so the seed only decides cluster
+  // membership. stable_sort keeps tied weights seeding in time order.
+  std::vector<size_t> order(time_weight_pairs.size());
+  std::iota(order.begin(), order.end(), size_t(0));
+  std::stable_sort(order.begin(), order.end(),
+                   [&](size_t a, size_t b) { return time_weight_pairs[a].second > time_weight_pairs[b].second; });
+
+  std::vector<char> assigned(time_weight_pairs.size(), 0);
   std::vector<std::pair<double, double>> merged_weights;
   merged_weights.reserve(time_weight_pairs.size());
 
-  size_t i = 0;
-  while (i < time_weight_pairs.size()) {
-    // Start a new cluster
-    double cluster_weight_sum = time_weight_pairs[i].second;
-    double cluster_time_weighted_sum = time_weight_pairs[i].first * time_weight_pairs[i].second;
-    size_t cluster_end = i + 1;
-
-    // Extend cluster to include all weights within merge_window of any cluster member
-    while (cluster_end < time_weight_pairs.size()) {
-      // Check if next weight is within merge_window of the cluster's weighted mean time
-      double cluster_mean_time = cluster_time_weighted_sum / cluster_weight_sum;
-      if (time_weight_pairs[cluster_end].first - cluster_mean_time <= merge_window) {
-        // Add to cluster
-        cluster_weight_sum += time_weight_pairs[cluster_end].second;
-        cluster_time_weighted_sum += time_weight_pairs[cluster_end].first * time_weight_pairs[cluster_end].second;
-        cluster_end++;
-      } else {
-        break;
+  for (size_t seed : order) {
+    if (assigned[seed]) continue;
+    const double seed_time = time_weight_pairs[seed].first;
+    double cluster_weight_sum = 0.0;
+    double cluster_time_weighted_sum = 0.0;
+    for (size_t j = 0; j < time_weight_pairs.size(); ++j) {
+      if (assigned[j]) continue;
+      if (std::abs(time_weight_pairs[j].first - seed_time) <= merge_window) {
+        assigned[j] = 1;
+        cluster_weight_sum += time_weight_pairs[j].second;
+        cluster_time_weighted_sum += time_weight_pairs[j].first * time_weight_pairs[j].second;
       }
     }
-
-    // Store merged weight with charge-weighted mean time
-    double merged_time = cluster_time_weighted_sum / cluster_weight_sum;
-    merged_weights.emplace_back(merged_time, cluster_weight_sum);
-
-    i = cluster_end;
+    merged_weights.emplace_back(cluster_time_weighted_sum / cluster_weight_sum, cluster_weight_sum);
   }
+
+  // Restore time ordering for downstream consumers.
+  std::sort(merged_weights.begin(), merged_weights.end());
 
   return merged_weights;
 }
 
 void WaveformAnalysisRAVEN::ExtractPhotoelectrons(const TVectorD& region_weights, int dict_start, int dict_cols,
                                                   int start_sample, int end_sample, double chi2ndf, int iterations_ran,
-                                                  DS::WaveformAnalysisResult* fit_result, double gain_calibration) {
+                                                  DS::WaveformAnalysisResult* fit_result, double gain_calibration,
+                                                  double width) {
   // Merge nearby weights to prevent PE overcounting from weight splitting
   std::vector<std::pair<double, double>> merged_weights =
       MergeNearbyWeights(region_weights, dict_start, dict_cols, weight_merge_window);
 
-  // Sanity check parameters
-  double template_scale = (template_type == 0) ? lognormal_scale : gaussian_width;
+  double template_scale = (template_type == 0) ? lognormal_scale : width;
   double region_start_time = start_sample * fTimeStep;
   double region_end_time = end_sample * fTimeStep;
 
