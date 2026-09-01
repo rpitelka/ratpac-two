@@ -277,7 +277,8 @@ class RatTest:
             print("  {}: KS prob = {}".format(success_message, prob))
 
             plotfile = os.path.join(self.testdir, objname + '.png')
-            self.draw_hist(plotfile, m_obj, c_obj)
+            if not self.draw_hist(plotfile, m_obj, c_obj):
+                overall_success = False
             fit_parameters = self.get_fit(m_obj, c_obj)
 
             if html:
@@ -296,6 +297,7 @@ class RatTest:
     def draw_hist(self, plotfile, master, current):
         '''
         Draw the histograms.
+        Returns False if ROOT could not write the plot file.
         '''
         c1 = TCanvas('c1', '', 600, 400)
         master.SetLineColor(kBlue)
@@ -319,8 +321,16 @@ class RatTest:
                 c1.SetLogy()
 
         c1.Update()
+        if os.path.exists(plotfile):
+            os.remove(plotfile)
         c1.Print(plotfile)
         c1.Close()
+
+        if not os.path.exists(plotfile):
+            print("  ERROR: ROOT failed to write {} (libASImage may be missing)".format(plotfile))
+            return False
+
+        return True
 
     def get_fit(self, master_hist, current_hist):
         '''
