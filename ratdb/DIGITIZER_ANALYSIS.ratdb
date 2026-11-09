@@ -210,3 +210,58 @@
 // min_total_charge = -50.,
 // max_total_charge = 500.
 }
+
+{
+"name": "DIGITIZER_ANALYSIS",
+"index": "MinuitFit",
+"run_range": [0, 0],
+
+// Analyzer whose PEs are refined. It must run before MinuitFit in the macro.
+"seed_analyzer": "RAVEN",
+
+// Template configuration, as in RAVEN
+"template_type": 1, // Template type: 0=lognormal, 1=gaussian
+
+// LogNormal template parameters (used when template_type = 0)
+"lognormal_scale": 10.5, // "m" parameter in Lognormal distribution
+"lognormal_shape": 0.15, // "sigma" parameter in Lognormal distribution
+
+// Gaussian template parameters (used when template_type = 1)
+"gaussian_width": 1.5, // Gaussian sigma parameter for SPE template
+
+// Take the template shape per PMT from PMTPULSE, scaled by the channel's pulse_width_scale.
+// Models PMTPULSE cannot describe with the configured template type use the parameters above instead.
+"width_from_pmtpulse": true,
+
+// Per-sample noise RMS weighting the chi-square, in mV. Matches the DIGITIZER noise_amplitude.
+"noise_rms": 0.40,
+
+// Each PE time may move this far from its seed time, in ns.
+"time_window": 2.0,
+// PEs sharing a seed time start this far apart, in ns, centered on the seed time.
+// PEs starting at the same time see identical gradients and never separate.
+"duplicate_spread": 1.0,
+// Each PE charge is limited to [0, charge_max_factor * seed charge].
+"charge_max_factor": 5.0,
+
+// Samples within this far before and after a PE's time window are fit, in ns.
+// PEs whose fit ranges overlap are fit together as one cluster.
+"fit_window_pre": 10.0,
+"fit_window_post": 10.0,
+// Clusters with more PEs than this are emitted with their seed values, unfit.
+"max_cluster_pes": 20,
+
+// Fit a template width scale shared by the PEs of a cluster
+"float_width": true,
+"width_scale_min": 0.5,
+"width_scale_max": 2.0,
+
+// Fit a baseline offset shared by the PEs of a cluster, limited to +/- baseline_limit (mV)
+"float_baseline": false,
+"baseline_limit": 1.0,
+
+// Minuit2 Migrad configuration
+"minuit_strategy": 1,
+"minuit_tolerance": 0.01,
+"minuit_max_calls": 10000
+}

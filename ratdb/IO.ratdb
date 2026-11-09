@@ -28,13 +28,14 @@
 // First entry is the config for the light path calculator, second is for group velocity calculator.
 
 
-"waveform_fitters": ["Lognormal", "Gaussian", "Sinc", "LucyDDM", "RAVEN"],
+"waveform_fitters": ["Lognormal", "Gaussian", "Sinc", "LucyDDM", "RAVEN", "MinuitFit"],
 
 "waveform_fitter_FOM_Lognormal": ["baseline","chi2ndf"],
 "waveform_fitter_FOM_Gaussian": ["baseline","width","chi2ndf"],
 "waveform_fitter_FOM_Sinc": ["peak"],
 "waveform_fitter_FOM_LucyDDM": ["time_error", "charge_error", "chi2ndf", "poisson_nll", "iterations_ran", "estimated_npe"],
 "waveform_fitter_FOM_RAVEN": ["chi2ndf", "iterations_ran", "weight", "estimated_npe"],
+"waveform_fitter_FOM_MinuitFit": ["chi2ndf", "fit_valid", "fit_status", "edm", "cluster_npe", "time_error", "charge_error", "time_shift", "width_scale", "baseline", "at_limit"],
 
 
 "event_fitters": ["fittime", "quadfitter", "fitcentroid", "fitdirectioncenter", "mimir"],

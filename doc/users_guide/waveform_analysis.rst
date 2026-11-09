@@ -257,6 +257,45 @@ The method can be configured using the following ratdb parameters:
 
 -------------------------
 
+.. _minuitfit:
+
+MinuitFit
+`````````
+
+Refines the photoelectrons reconstructed by another waveform analyzer, such as RAVEN, with a Minuit2 (Migrad) chi-square fit to the waveform. The seed analyzer must run before MinuitFit in the macro. Seed PEs whose fit ranges overlap are grouped into clusters and each cluster is fit independently. Every PE time may move within a window around its seed time and every PE charge is free, while a template width scale and, optionally, a baseline offset are shared by the PEs of a cluster. The fit never adds or removes PEs. When an analyzer splits one hit into several PEs at the same time, those PEs start the fit spread apart, since PEs that start together see identical gradients and never separate. The single PE template matches RAVEN's, taken per PMT from ``PMTPULSE`` and scaled by the channel's ``pulse_width_scale`` calibration. When a fit fails, or a cluster has too many PEs or too few samples to fit, its seed PEs are written unchanged with ``fit_valid`` set to 0.
+
+The method can be configured using the following ratdb parameters:
+
+================================  ===================
+**Name**                          **Description**
+================================  ===================
+``seed_analyzer``                 Name of the analyzer result whose PEs are refined, e.g. ``RAVEN``.
+``template_type``                 Template type: 0=lognormal, 1=gaussian.
+``lognormal_scale``               Lognormal "m" parameter (used when template_type=0).
+``lognormal_shape``               Lognormal "sigma" parameter (used when template_type=0).
+``gaussian_width``                Gaussian sigma parameter (used when template_type=1).
+``width_from_pmtpulse``           If true, take the template shape per PMT from ``PMTPULSE``, scaled by the channel's ``pulse_width_scale``. Must be a boolean.
+``noise_rms``                     Per-sample noise RMS weighting the chi-square, in mV.
+``time_window``                   Each PE time may move this far from its seed time, in ns.
+``duplicate_spread``              Spacing (ns) of the starting times of PEs that share a seed time.
+``charge_max_factor``             Each PE charge is limited to [0, charge_max_factor * seed charge].
+``fit_window_pre``                Samples within this far (ns) before a PE's time window are fit.
+``fit_window_post``               Samples within this far (ns) after a PE's time window are fit.
+``max_cluster_pes``               Clusters with more PEs than this are written with their seed values, unfit.
+``float_width``                   If true, fit a template width scale per cluster. Must be a boolean.
+``width_scale_min``               Lower limit of the template width scale.
+``width_scale_max``               Upper limit of the template width scale.
+``float_baseline``                If true, fit a baseline offset per cluster. Must be a boolean.
+``baseline_limit``                The baseline offset is limited to +/- this value, in mV.
+``minuit_strategy``               Minuit2 strategy: 0, 1 or 2.
+``minuit_tolerance``              Minuit2 EDM tolerance.
+``minuit_max_calls``              Maximum chi-square evaluations per cluster.
+================================  ===================
+
+Each PE carries the figures of merit ``chi2ndf``, ``edm``, ``fit_status`` (the Minuit status, or -1 when the cluster was not fit), ``fit_valid``, ``cluster_npe``, ``time_error``, ``charge_error``, ``time_shift`` (fitted minus seed time), ``width_scale``, ``baseline`` and ``at_limit`` (1 when the time stopped at its window edge).
+
+-------------------------
+
 WaveformAnalysisResult
 ``````````````````````
 
