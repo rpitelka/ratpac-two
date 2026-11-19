@@ -106,6 +106,8 @@ class WaveformAnalysisMinuitFit : public WaveformAnalyzerBase {
   bool width_from_pmtpulse;  ///< Take the template shape per PMT from PMTPULSE instead of the parameters above
 
   std::map<std::string, TemplateShape> fModelShapeCache;  ///< PMTPULSE shape per PMT model, before per-channel scaling
+  /// Mean square of the gaussian width the generator draws per PE, per PMT model, before per-channel scaling
+  std::map<std::string, double> fModelWidthMeanSquareCache;
 
   // Fit configuration
   double noise_rms;          ///< Per-sample noise RMS (mV) weighting the chi-square
@@ -138,8 +140,9 @@ class WaveformAnalysisMinuitFit : public WaveformAnalyzerBase {
   void DoAnalysis(DS::DigitPMT *digitpmt, const std::vector<UShort_t> &digitWfm) override;
 
   /// Template shape for one PMT: the PMTPULSE shape for its model, with the lognormal 'm' or
-  /// the gaussian sigma scaled by the channel's pulse_width_scale calibration.
-  TemplateShape ShapeForPMT(int pmtid);
+  /// the gaussian sigma scaled by the channel's pulse_width_scale calibration. Also sets the
+  /// mean square of the gaussian width its PEs are drawn with, scaled the same way.
+  TemplateShape ShapeForPMT(int pmtid, double &width_mean_square);
 
   /// Template shape built from the configured lognormal/gaussian parameters, used when
   /// PMTPULSE is switched off or cannot describe a model.
@@ -161,7 +164,7 @@ class WaveformAnalysisMinuitFit : public WaveformAnalyzerBase {
 
   /// Fit one cluster and add its PEs to the result
   void FitCluster(const Cluster &cluster, const std::vector<double> &voltWfm, const TemplateShape &shape,
-                  DS::WaveformAnalysisResult *fit_result, double gain_calibration);
+                  double width_mean_square, DS::WaveformAnalysisResult *fit_result, double gain_calibration);
 
   /// Add a cluster's seed PEs to the result unchanged, flagged as unfit
   void EmitSeed(const Cluster &cluster, DS::WaveformAnalysisResult *fit_result, double gain_calibration,

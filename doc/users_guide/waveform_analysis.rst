@@ -292,7 +292,7 @@ The method can be configured using the following ratdb parameters:
 ``minuit_max_calls``              Maximum chi-square evaluations per cluster.
 ================================  ===================
 
-Each PE carries the figures of merit ``chi2ndf``, ``edm``, ``fit_status`` (the Minuit status, or -1 when the cluster was not fit), ``fit_valid``, ``cluster_npe``, ``time_error``, ``charge_error``, ``time_shift`` (fitted minus seed time), ``width_scale``, ``baseline`` and ``at_limit`` (1 when the time stopped at its window edge).
+Each PE carries the figures of merit ``chi2ndf``, ``edm``, ``fit_status`` (the Minuit status, or -1 when the cluster was not fit), ``fit_valid``, ``cluster_npe``, ``time_error``, ``charge_error``, ``time_shift`` (fitted minus seed time), ``width_scale``, ``pe_spread`` (the PE arrival-time spread in ns that the fitted width implies: its excess in quadrature over the RMS of the single-PE widths ``PMTPULSE`` draws from; Gaussian template only), ``baseline`` and ``at_limit`` (1 when the time stopped at its window edge).
 
 -------------------------
 

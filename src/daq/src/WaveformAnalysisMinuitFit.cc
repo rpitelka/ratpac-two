@@ -44,6 +44,18 @@ double PDFMedian(const std::vector<double>& x, const std::vector<double>& prob) 
   return x.back();
 }
 
+// Mean square of the widths the generator draws from the same PDF. Inverting the trapezoidal CDF
+// spreads each interval's probability uniformly across it.
+double PDFMeanSquare(const std::vector<double>& x, const std::vector<double>& prob) {
+  double norm = 0.0, moment2 = 0.0;
+  for (size_t i = 0; i + 1 < x.size(); ++i) {
+    const double p = (x[i + 1] - x[i]) * (prob[i] + prob[i + 1]) / 2.0;
+    norm += p;
+    moment2 += p * (x[i] * x[i] + x[i] * x[i + 1] + x[i + 1] * x[i + 1]) / 3.0;
+  }
+  return moment2 / norm;
+}
+
 // Parameter layout of a cluster fit: the parameters shared by the cluster, then a
 // (time, charge) pair per PE.
 constexpr int kBaseline = 0;
@@ -202,9 +214,7 @@ void WaveformAnalysisMinuitFit::SetI(std::string param, int value) {
 }
 
 WaveformAnalysisMinuitFit::TemplateShape WaveformAnalysisMinuitFit::ConfiguredShape() const {
-  // The gaussian template has no shape parameter, and Configure leaves lognormal_shape unset
-  // whenever that template is selected, so the shape stays zero here: reading it would be an
-  // uninitialized read.
+  // Read the appropriate parameters for the configured template type.
   return (template_type == 0) ? TemplateShape(lognormal_shape, lognormal_scale) : TemplateShape(0.0, gaussian_width);
 }
 
@@ -234,6 +244,7 @@ WaveformAnalysisMinuitFit::TemplateShape WaveformAnalysisMinuitFit::ShapeForMode
   // Fall back to the configured parameters whenever PMTPULSE cannot describe this model with
   // the template MinuitFit is set up to fit.
   TemplateShape shape = ConfiguredShape();
+  double width_mean_square = shape.second * shape.second;
   std::string reason;
 
   if (!lpulse) {
@@ -251,7 +262,10 @@ WaveformAnalysisMinuitFit::TemplateShape WaveformAnalysisMinuitFit::ShapeForMode
       } else if (template_type == 0) {
         shape = TemplateShape(lpulse->GetD("lognormal_width"), lpulse->GetD("lognormal_mean"));
       } else {
-        shape.second = PDFMedian(lpulse->GetDArray("gaussian_width"), lpulse->GetDArray("gaussian_width_prob"));
+        const std::vector<double> width = lpulse->GetDArray("gaussian_width");
+        const std::vector<double> width_prob = lpulse->GetDArray("gaussian_width_prob");
+        shape.second = PDFMedian(width, width_prob);
+        width_mean_square = PDFMeanSquare(width, width_prob);
       }
     } catch (DBNotFoundError&) {
       reason = "PMTPULSE entry is missing template parameters";
@@ -268,15 +282,19 @@ WaveformAnalysisMinuitFit::TemplateShape WaveformAnalysisMinuitFit::ShapeForMode
   }
 
   fModelShapeCache[model_name] = shape;
+  fModelWidthMeanSquareCache[model_name] = width_mean_square;
   return shape;
 }
 
-WaveformAnalysisMinuitFit::TemplateShape WaveformAnalysisMinuitFit::ShapeForPMT(int pmtid) {
+WaveformAnalysisMinuitFit::TemplateShape WaveformAnalysisMinuitFit::ShapeForPMT(int pmtid, double& width_mean_square) {
   DS::Run* run = DS::RunStore::GetCurrentRun();
-  TemplateShape shape = ShapeForModel(run->GetPMTInfo()->GetModelNameByID(pmtid));
+  const std::string model_name = run->GetPMTInfo()->GetModelNameByID(pmtid);
+  TemplateShape shape = ShapeForModel(model_name);
   // The generator scales the lognormal 'm' and the gaussian width per channel, leaving the
   // lognormal 'sigma' alone.
-  shape.second *= run->GetChannelStatus()->GetPulseWidthScaleByPMTID(pmtid);
+  const double pulse_width_scale = run->GetChannelStatus()->GetPulseWidthScaleByPMTID(pmtid);
+  shape.second *= pulse_width_scale;
+  width_mean_square = fModelWidthMeanSquareCache.at(model_name) * pulse_width_scale * pulse_width_scale;
   return shape;
 }
 
@@ -413,8 +431,8 @@ std::vector<WaveformAnalysisMinuitFit::Cluster> WaveformAnalysisMinuitFit::Build
 }
 
 void WaveformAnalysisMinuitFit::FitCluster(const Cluster& cluster, const std::vector<double>& voltWfm,
-                                           const TemplateShape& shape, DS::WaveformAnalysisResult* fit_result,
-                                           double gain_calibration) {
+                                           const TemplateShape& shape, double width_mean_square,
+                                           DS::WaveformAnalysisResult* fit_result, double gain_calibration) {
   const size_t npe = cluster.pes.size();
   const int nsamples = cluster.last_sample - cluster.first_sample + 1;
   const int nfree = 2 * npe + (float_width ? 1 : 0) + (float_baseline ? 1 : 0);
@@ -472,6 +490,14 @@ void WaveformAnalysisMinuitFit::FitCluster(const Cluster& cluster, const std::ve
   const double* errors = fMinimizer->Errors();
   const double chi2ndf = fMinimizer->MinValue() / (nsamples - nfree);
   const double edm = fMinimizer->Edm();
+  // A cluster wider than its PEs' own widths is read as PEs arriving spread in time, which for
+  // the gaussian template adds in quadrature to them. Each PE's width is drawn from PMTPULSE, so
+  // their mean square, not the template's median, is what the fitted width exceeds. The
+  // lognormal has no such reading.
+  const double fitted_width = x[kWidthScale] * shape.second;
+  const double pe_spread = (template_type == 0)
+                               ? WaveformUtil::INVALID
+                               : std::sqrt(std::max(fitted_width * fitted_width - width_mean_square, 0.0));
   // A time this close to its window edge was stopped by the limit, not by the waveform.
   const double limit_tolerance = 1e-3 * time_window;
   for (size_t k = 0; k < npe; ++k) {
@@ -490,6 +516,7 @@ void WaveformAnalysisMinuitFit::FitCluster(const Cluster& cluster, const std::ve
                           {"charge_error", errors[kFirstPE + 2 * k + 1] * gain_calibration},
                           {"time_shift", time - pe.seed_time},
                           {"width_scale", x[kWidthScale]},
+                          {"pe_spread", pe_spread},
                           {"baseline", x[kBaseline]},
                           {"at_limit", at_limit ? 1.0 : 0.0},
                       });
@@ -512,6 +539,7 @@ void WaveformAnalysisMinuitFit::EmitSeed(const Cluster& cluster, DS::WaveformAna
                           {"charge_error", WaveformUtil::INVALID},
                           {"time_shift", 0.0},
                           {"width_scale", WaveformUtil::INVALID},
+                          {"pe_spread", WaveformUtil::INVALID},
                           {"baseline", WaveformUtil::INVALID},
                           {"at_limit", 0.0},
                       });
@@ -536,10 +564,12 @@ void WaveformAnalysisMinuitFit::DoAnalysis(DS::DigitPMT* digitpmt, const std::ve
   }
 
   std::vector<double> voltWfm = WaveformUtil::ADCtoVoltage(digitWfm, fVoltageRes, pedestal);
-  const TemplateShape shape = width_from_pmtpulse ? ShapeForPMT(pmtid) : ConfiguredShape();
+  TemplateShape shape = ConfiguredShape();
+  double width_mean_square = shape.second * shape.second;
+  if (width_from_pmtpulse) shape = ShapeForPMT(pmtid, width_mean_square);
 
   for (const Cluster& cluster : BuildClusters(pes, static_cast<int>(voltWfm.size()))) {
-    FitCluster(cluster, voltWfm, shape, fit_result, gain_calibration);
+    FitCluster(cluster, voltWfm, shape, width_mean_square, fit_result, gain_calibration);
   }
 }
 

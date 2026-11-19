@@ -35,7 +35,7 @@
 "waveform_fitter_FOM_Sinc": ["peak"],
 "waveform_fitter_FOM_LucyDDM": ["time_error", "charge_error", "chi2ndf", "poisson_nll", "iterations_ran", "estimated_npe"],
 "waveform_fitter_FOM_RAVEN": ["chi2ndf", "iterations_ran", "weight", "estimated_npe"],
-"waveform_fitter_FOM_MinuitFit": ["chi2ndf", "fit_valid", "fit_status", "edm", "cluster_npe", "time_error", "charge_error", "time_shift", "width_scale", "baseline", "at_limit"],
+"waveform_fitter_FOM_MinuitFit": ["chi2ndf", "fit_valid", "fit_status", "edm", "cluster_npe", "time_error", "charge_error", "time_shift", "width_scale", "pe_spread", "baseline", "at_limit"],
 
 
 "event_fitters": ["fittime", "quadfitter", "fitcentroid", "fitdirectioncenter", "mimir"],
