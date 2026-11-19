@@ -103,6 +103,10 @@ There are several additional waveform analysis proccesors described below, each 
     
     /rat/proc WaveformAnalysisRAVEN
 
+    # Estimate the number of PEs in each pulse
+    # found by RAVEN
+    /rat/proc WaveformAnalysisNPEEstimation
+
 For all of these processors, there is a utility located in ``util/src/`` called ``WaveformUtil.cc`` that provides useful analysis tools. For example, there are public methods to convert ADC counts to voltage, identify the peak of the waveform and the corresponding sample, get the total number of threshold crossings, etc.
 
 .. _common_parameters:
@@ -216,7 +220,7 @@ The method can be configured using the following ratdb parameters.
 ``peak_height_threshold``         All peaks below this peak height in the deconvolved waveform will not be considered.
 ``charge_threshold``              All wave packets with integrated charge below this threshold will not be considered.
 ``min_peak_distance``             If two resolved wave packets are closer than this distance (in ns), they will be merged and considered as one wave packet. 
-``npe_estimate``                  If true, perform a NPE estimation on all resolved waveform packets using a likelihood on the integral of the packets.
+``npe_estimate``                  If true, perform a NPE estimation on all resolved waveform packets using a likelihood on the integral of the packets. Deprecated: set false and run :ref:`npeestimation` on the LucyDDM result instead.
 ``npe_estimate_charge_width``     Width of the single PE charge distribution (in pC) used in the NPE estimation likelihood.
 ``npe_estimate_max_pes``          Maximum number of PEs to consider in the NPE estimation likelihood.
 ================================  ===================
@@ -250,10 +254,36 @@ The method can be configured using the following ratdb parameters:
 ``refine_times``                  If true, move surviving components to nearby times when that lowers the residual. Must be a boolean.
 ``weight_threshold``              Minimum weight for component significance.
 ``weight_merge_window``           Time window (ns) for merging nearby weights. Set to 0 to disable.
-``npe_estimate``                  If true, perform NPE estimation on resolved wave packets.
+``npe_estimate``                  If true, perform NPE estimation on resolved wave packets. Deprecated: set false and run :ref:`npeestimation` on the RAVEN result instead.
 ``npe_estimate_charge_width``     Width of single PE charge distribution (in pC) for NPE estimation.
 ``npe_estimate_max_pes``          Maximum number of PEs to consider in NPE estimation.
 ================================  ===================
+
+-------------------------
+
+.. _npeestimation:
+
+NPEEstimation
+`````````````
+
+Estimates the number of photoelectrons in each pulse reconstructed by another waveform analyzer, such as RAVEN or LucyDDM. The seed analyzer must run before NPEEstimation in the macro, and the waveform itself is not used. Seed PEs that share a time, from an analyzer that already split a pulse into integer PEs, are summed back into one pulse, so running NPEEstimation on its own output gives the same result unless the PE times are spread. The number of PEs in each pulse is the one that maximizes a likelihood on the pulse charge, with a gaussian single-PE charge distribution whose mean is scaled per channel by the ``charge_scale`` calibration. With ``spe_charge_from_pmtcharge``, the mean and width of that distribution are instead those of the ``PMTCHARGE`` distribution of the channel's PMT model, the one the simulation samples photoelectron charges from, so a detector mixing PMT models with different gains is counted correctly. That many PEs are written sharing the pulse charge. By default they are all written at the pulse time; a pulse time is the charge-weighted center of its PEs, so with ``pe_time_spread`` they are instead placed at the quantiles of a gaussian of that sigma centered on it, which keeps the PE time distribution of multi-PE channels from clumping at the pulse times. With ``pe_time_spread_fom``, the sigma of each pulse is instead read from that figure of merit of the seed, such as MinuitFit's ``pe_spread``, which measures how much wider than a single PE the pulse is; pulses where it is invalid, such as those the fit did not converge on, use ``pe_time_spread``. Spread PEs no longer share a time, so NPEEstimation run on a spread result treats each PE as its own pulse. The result is stored under ``output_name``, so several instances can run in one macro, for example on different seed analyzers.
+
+The method can be configured using the following ratdb parameters:
+
+================================  ===================
+**Name**                          **Description**
+================================  ===================
+``seed_analyzer``                 Name of the analyzer result whose PEs are read, e.g. ``RAVEN``.
+``output_name``                   Name the result is stored under. Must differ from ``seed_analyzer``.
+``spe_charge``                    Mean single-PE charge in pC, before the per-channel ``charge_scale``. It should be the mean over all single PEs; isolated single PEs, cut by the seed analyzer's threshold, are biased high.
+``spe_charge_width``              Width of the single-PE charge distribution in pC.
+``spe_charge_from_pmtcharge``     If true, take the single-PE charge mean and width per PMT model from ``PMTCHARGE`` instead of ``spe_charge`` and ``spe_charge_width``. Must be a boolean.
+``max_pes``                       Maximum number of PEs to consider in one pulse.
+``pe_time_spread``                Sigma in ns of the gaussian the PEs of a multi-PE pulse are spread over, centered on the pulse time. 0 places them all at the pulse time.
+``pe_time_spread_fom``            Figure of merit of the seed giving the sigma in ns of each pulse instead, e.g. ``pe_spread`` from MinuitFit. Pulses where it is invalid use ``pe_time_spread``. Empty uses ``pe_time_spread`` for every pulse.
+================================  ===================
+
+Each PE carries the figure of merit ``estimated_npe``, the number of PEs its pulse was split into.
 
 -------------------------
 

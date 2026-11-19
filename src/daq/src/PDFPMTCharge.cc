@@ -2,6 +2,8 @@
 #include <RAT/Log.hh>
 #include <RAT/PDFPMTCharge.hh>
 #include <Randomize.hh>
+#include <algorithm>
+#include <cmath>
 
 namespace RAT {
 
@@ -32,6 +34,18 @@ PDFPMTCharge::PDFPMTCharge(std::string pmt_model) {
     fChargeProb[i] /= integral;
     fChargeProbCumu[i] /= integral;
   }
+
+  // PickCharge interpolates linearly in the cumulative distribution, so each interval holds its
+  // trapezoid probability spread uniformly across it.
+  double moment1 = 0.0, moment2 = 0.0;
+  for (size_t i = 0; i < fCharge.size() - 1; i++) {
+    const double a = fCharge[i], b = fCharge[i + 1];
+    const double p = fChargeProbCumu[i + 1] - fChargeProbCumu[i];
+    moment1 += p * (a + b) / 2.0;
+    moment2 += p * (a * a + a * b + b * b) / 3.0;
+  }
+  fMean = moment1;
+  fStdDev = std::sqrt(std::max(moment2 - moment1 * moment1, 0.0));
 }
 
 PDFPMTCharge::~PDFPMTCharge() {}
@@ -57,8 +71,8 @@ double PDFPMTCharge::PDF(double q) const {
   if (q < fCharge[0]) return 0.0;  // below defined range
   for (size_t i = 1; i < fCharge.size(); i++) {
     if (q <= fCharge[i]) {
-      return (q - fCharge[i - 1]) * (fChargeProb[i] - fChargeProb[i - 1]) /
-             (fCharge[i] - fCharge[i - 1]);  // linear interpolation
+      return fChargeProb[i - 1] + (q - fCharge[i - 1]) * (fChargeProb[i] - fChargeProb[i - 1]) /
+                                      (fCharge[i] - fCharge[i - 1]);  // linear interpolation
     }
   }
   return 0.0;  // above defined range

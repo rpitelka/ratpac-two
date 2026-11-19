@@ -45,6 +45,14 @@ void WaveformAnalysisLucyDDM::Configure(const std::string& config_name) {
   }
 }
 
+void WaveformAnalysisLucyDDM::BeginOfRun(DS::Run* run) {
+  if (npe_estimate) {
+    warn << "WaveformAnalysisLucyDDM: npe_estimate is deprecated and will be removed. Set it false and run "
+            "WaveformAnalysisNPEEstimation on the LucyDDM result instead."
+         << newline;
+  }
+}
+
 void WaveformAnalysisLucyDDM::DoAnalysis(DS::DigitPMT* digitpmt, const std::vector<UShort_t>& digitWfm) {
   double gain_calibration = DS::RunStore::GetCurrentRun()->GetChannelStatus()->GetChargeScaleByPMTID(digitpmt->GetID());
   vpe_integral = vpe_charge * fTermOhms * gain_calibration;

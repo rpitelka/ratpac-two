@@ -131,6 +131,7 @@
 // if true, perform a final NPE estimation on all resolved wave packet in the deconvolved 
 // waveform. Estimate the number of PEs in each packet using a gaussian PDF on charge.
 // The mean of the single PE charge distribution is centered around `vpe_charge`.
+// Deprecated: set false and run WaveformAnalysisNPEEstimation on this result instead.
 "npe_estimate": true,
 // Width of the single PE charge distribution, in pC.
 "npe_estimate_charge_width": 0.4,
@@ -197,6 +198,7 @@
 // if true, perform a final NPE estimation on all resolved wave packet in the deconvolved 
 // waveform. Estimate the number of PEs in each packet using a gaussian PDF on charge.
 // The mean of the single PE charge distribution is centered around `vpe_charge`.
+// Deprecated: set false and run WaveformAnalysisNPEEstimation on this result instead.
 "npe_estimate": true,
 // Width of the single PE charge distribution, in pC.
 "npe_estimate_charge_width": 0.4,
@@ -209,4 +211,32 @@
 // the WaveformPrep time and charge.
 // min_total_charge = -50.,
 // max_total_charge = 500.
+}
+
+{
+"name": "DIGITIZER_ANALYSIS",
+"index": "NPEEstimation",
+"run_range": [0, 0],
+
+// Analyzer whose PEs are read. It must run before NPEEstimation in the macro.
+"seed_analyzer": "RAVEN",
+// Name the result is stored under. Must differ from seed_analyzer.
+"output_name": "NPEEstimation",
+
+// Single-PE charge distribution, in pC. The mean is scaled per channel by the charge_scale calibration.
+// It should be the mean over all single PEs: isolated single PEs, cut by the seed analyzer's
+// threshold, are biased high.
+"spe_charge": 1.6,
+"spe_charge_width": 0.4,
+// Take the mean and width per PMT model from the PMTCHARGE distribution the simulation samples PE
+// charges from, instead of spe_charge and spe_charge_width. Must be a boolean.
+"spe_charge_from_pmtcharge": false,
+// Maximum number of PEs to consider in one pulse.
+"max_pes": 20,
+// Place the PEs of a multi-PE pulse at the quantiles of a gaussian of this sigma (ns) centered on
+// the pulse time, rather than all at the pulse time. 0 places them all at the pulse time.
+"pe_time_spread": 0.0,
+// Seed figure of merit giving the sigma (ns) of each pulse instead, e.g. MinuitFit's "pe_spread".
+// Pulses where it is invalid use pe_time_spread. Empty uses pe_time_spread for every pulse.
+"pe_time_spread_fom": "",
 }

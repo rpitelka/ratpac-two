@@ -32,6 +32,7 @@
 #include <RAT/WaveformAnalysisGaussian.hh>
 #include <RAT/WaveformAnalysisLognormal.hh>
 #include <RAT/WaveformAnalysisLucyDDM.hh>
+#include <RAT/WaveformAnalysisNPEEstimation.hh>
 #include <RAT/WaveformAnalysisRAVEN.hh>
 #include <RAT/WaveformAnalysisSinc.hh>
 #include <RAT/WaveformPrep.hh>
@@ -106,6 +107,7 @@ ProcBlockManager::ProcBlockManager(ProcBlock *theMainBlock) {
   AppendProcessor<WaveformAnalysisSinc>();
   AppendProcessor<WaveformAnalysisLucyDDM>();
   AppendProcessor<WaveformAnalysisRAVEN>();
+  AppendProcessor<WaveformAnalysisNPEEstimation>();
   // Misc
   AppendProcessor<CountProc>();
   AppendProcessor<PruneProc>();

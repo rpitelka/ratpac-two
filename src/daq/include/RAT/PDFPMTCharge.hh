@@ -7,6 +7,7 @@
 ///
 /// REVISION HISTORY:\n
 ///     2015-01-07 : B Land - Added doxygen header block \n
+///     2026-11-16 : R Carpen Pitelka - Added GetMean and GetStdDev, fixed PDF interpolation \n
 ///
 /// \details Enabled by setting MC.pmt_charge_model to the index of a table
 ///          named PMTCHARGE. This table contains the charge PDF (which will be
@@ -37,8 +38,15 @@ class PDFPMTCharge : public PMTCharge {
   /** Value of charge PDF at charge q (not normalized) */
   virtual double PDF(double q) const;
 
+  /** Mean of the charges PickCharge returns. */
+  double GetMean() const { return fMean; }
+
+  /** Standard deviation of the charges PickCharge returns. */
+  double GetStdDev() const { return fStdDev; }
+
  protected:
   std::vector<double> fCharge, fChargeProb, fChargeProbCumu;
+  double fMean, fStdDev;
 };
 
 }  // namespace RAT

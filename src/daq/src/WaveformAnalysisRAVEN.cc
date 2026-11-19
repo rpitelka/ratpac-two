@@ -178,6 +178,14 @@ void WaveformAnalysisRAVEN::SetI(std::string param, int value) {
   }
 }
 
+void WaveformAnalysisRAVEN::BeginOfRun(DS::Run* run) {
+  if (npe_estimate) {
+    warn << "WaveformAnalysisRAVEN: npe_estimate is deprecated and will be removed. Set it false and run "
+            "WaveformAnalysisNPEEstimation on the RAVEN result instead."
+         << newline;
+  }
+}
+
 void WaveformAnalysisRAVEN::ClearTemplateCache() {
   fTemplateCache.clear();
   fModelShapeCache.clear();

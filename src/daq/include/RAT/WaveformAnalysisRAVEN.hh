@@ -75,6 +75,9 @@ class WaveformAnalysisRAVEN : public WaveformAnalyzerBase {
   void SetD(std::string param, double value) override;
   void SetI(std::string param, int value) override;
 
+  /// Warn when the deprecated built-in NPE estimation is on
+  void BeginOfRun(DS::Run *run) override;
+
  protected:
   DBLinkPtr fDigit;
 

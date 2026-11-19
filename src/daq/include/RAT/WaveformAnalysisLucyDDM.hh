@@ -38,6 +38,8 @@ class WaveformAnalysisLucyDDM : public WaveformAnalyzerBase {
   };
   virtual ~WaveformAnalysisLucyDDM(){};
   void Configure(const std::string &config_name) override;
+  // Warn when the deprecated built-in NPE estimation is on
+  void BeginOfRun(DS::Run *run) override;
 
  protected:
   // Digitizer settings
